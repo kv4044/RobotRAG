@@ -563,6 +563,102 @@ Cada entrada segue o formato Prompt → Resposta.
 
 **RESPOSTA**
 
+        Antes de gerar a estrutura, três perguntas que mudam o que escrevo (e evitam refazer):
+        
+        "prefiro usar os 3 métodos para o manual" — a interface MotorRAG que propus tem 3 métodos no total: ingerirManual, resolverEnigma, estaPronto (só um trata do manual). Quando dizes "3 métodos para o manual", queres dizer (a) mantenho a interface tal como está com esses 3 métodos, ou (b) queres que a ingestão do manual seja partida em 3 métodos próprios (ex.: descarregar/chunking/vetorizar)? Se for (b), isso é domínio do Kaiky e tem de ser ele a validar.
+        "o Kaiky decide internamente a similaridade" — então removo o campo similaridade de RespostaRAG e a constante LIMIAR_SIMILARIDADE da Configuracao. Mas o teu motor precisa de alguma sinalização para decidir se vale o /unlock (e poupar os −10 HP). Confirmas que RespostaRAG fica só com chave + sucesso, e o teu motor confia no sucesso (Kaiky só devolve sucesso=true se passou o limiar interno dele)? Ou queres outro campo?
+        groupId / nome do artefacto — usei com.arena.agente por assumir. O package raiz deve casar com o groupId do pom.xml que já commitaram. Qual é o <groupId> e <artifactId> atuais do vosso pom.xml? (Sem isto, o package raiz que eu escrever pode não bater com o que o Maven/IntelliJ espera.)
+        
+        Sobre o porquê do com.arena.agente.modelo (respondo já, não custa token relevante): não é um package "novo grande" — é o package raiz (com.arena.agente) com um sub-package modelo. A convenção Java é groupId invertido como raiz e sub-packages por responsabilidade (modelo, rede, heuristica, ui, rag). Isto reforça o SRP exigido na avaliação e evita o "Classe Deus": a fronteira entre camadas fica visível na própria árvore de pastas. Se preferes estrutura plana (tudo num só package, sem sub-packages), também é válido e mais simples para um projeto deste tamanho — diz qual preferes.
+        Responde às 3 e digo exatamente que pastas criar no IntelliJ e onde cada classe assenta.
 
+---
+
+**PROMPT**
+
+        1. a
+        2. sim pode manter esses campos definidos
+        3. artifactId NeymarRAG e groupId org.example
+
+**RESPOSTA**
+
+        SINALIZAÇÃO: as alterações tocam a interface `MotorRAG` (domínio do Kaiky). Apliquei-as à letra do teu pedido (1 = manter; 2 = manter `similaridade` no `RespostaRAG`). Continua a depender de **validação do Kaiky** antes de congelar.
+        
+        Decisões fechadas neste turno:
+        - `groupId org.example` → package raiz `org.example` (não `com.arena.agente`). Sub-packages por responsabilidade.
+          - `artifactId NeymarRAG` → não afeta packages; só nomeia o JAR/módulo.
+          - Interface RAG: mantida com 3 métodos (`ingerirManual`, `resolverEnigma`, `estaPronto`).
+          - `RespostaRAG`: mantém `chave`, `similaridade`, `sucesso` (Kaiky decide o limiar internamente, mas o campo fica exposto para auditoria/decisão).
+        
+        Sobre o **porquê do package qualificado** (`org.example.modelo` etc.): em Java, o nome do package **é** a localização física da classe a partir da raiz de fontes. `org.example.modelo.Recurso` significa que `Recurso.java` está em `src/main/java/org/example/modelo/`. Não é "um nome novo grande" — é o caminho da pasta escrito com pontos. O IntelliJ exige que o `package` declarado no topo do ficheiro case exatamente com a pasta onde ele vive; se não casar, dá erro de compilação.
+        
+        Estrutura de pastas a criar no IntelliJ (Maven Standard Directory Layout):
+
+![estrutura_pastas_projeto_neymarrag.png](images_28512_VictorLopes/estrutura_pastas_projeto_neymarrag.png)
+
+        Como criar isto no IntelliJ, passo a passo:
+        
+        **1. Criar os 5 sub-packages**
+        No painel `Project` (lado esquerdo), expande até `src/main/java/org/example`. Clica com o botão direito em `example` → `New` → `Package`. Escreve só o nome curto: `modelo`. Repete para `rede`, `heuristica`, `ui`, `rag`. (Não escrevas `org.example.modelo` — o IntelliJ já parte de `org.example`, só queres o segmento final.)
+        
+        **2. Mover as classes que já existem para o package certo**
+        As classes que criaste na estrutura inicial (`AgenteExplorador`, `ArenaClient`, `OllamaClient`, `DocumentoVetorial`, `MotorHeuristico`, `PainelMapaCalor`) estão provavelmente soltas em `org/example`. Arrasta cada uma para o package destino no painel `Project` (ou seleciona e `F6` = Refactor → Move). Confirma no diálogo. O IntelliJ reescreve a linha `package` do topo e corrige todos os `import` automaticamente — não edites isso à mão. Mapa:
+        
+        `AgenteExplorador`, `Configuracao` → ficam em `org.example` (raiz). `ArenaClient`, `OllamaClient` → `rede`. `MotorHeuristico` → `heuristica`. `PainelMapaCalor` → `ui`. `DocumentoVetorial` → `modelo`.
+        
+        **3. Criar as classes novas**
+        Botão direito no package → `New` → `Java Class` → nome sem `.java`. Os modelos JSON (`EstadoRobot`, `Recurso`, `ObjetoFixo`, `Cofre`, `OutroRobot`, `Percecao`, `RespostaAcao`) vão para `modelo`. `Configuracao` na raiz. Em `rag`: `New` → `Java Class`, mas para `MotorRAG` escolhe o tipo `Interface` (não `Class`); `RespostaRAG` fica como `Class`.
+        
+        **4. Verificar**
+        O `package` no topo de cada ficheiro tem de bater com a pasta. Ex.: `Recurso.java` em `modelo/` → primeira linha `package org.example.modelo;`. Se o IntelliJ sublinhar a vermelho, a pasta e o `package` não coincidem.
+        
+        Antes de eu gerar o conteúdo das classes (turno anterior já tinha os esqueletos, mas com package `com.arena.agente`), confirmo o ajuste: troco **todos** os `package com.arena.agente...` por `package org.example...` e os `import` correspondentes. Queres que eu reemita os esqueletos já com `org.example` corrigido, ou avanço direto para o primeiro ficheiro de implementação real (`ArenaClient` ou `MotorHeuristico`)?
+
+---
+
+**PROMPT**
+
+        O ambiente ja ta pronto para fazer push e começarmos o trabalho mais pesado?
+
+**RESPOSTA**
+
+        Estrutura confirmada pela screenshot: packages corretos, MotorRAG como interface (ícone verde), classes nos sítios certos, auditorias individuais por aluno em docs/. Um único reparo antes do Git:
+        OllamaClient está escrito OllamaClient na árvore (lê-se "OllamaClient" mas o ficheiro aparece como OllamaClient — confirma se não é OlIamaClient com I maiúsculo ou typo). Pela imagem parece OllamaClient correto. Se estiver certo, ignora.
+        Sequência Git para fechar a preparação em main e abrir as branches:
+        # 1. Confirmar que a estrutura está toda staged e o projeto compila
+        mvn compile
+        git add .
+        git status                 # revê o que vai entrar
+        
+        # 2. Commit de preparação (estrutura + esqueletos) em main
+        git commit -m "estrutura: packages org.example e esqueletos das classes (modelo, rede, heuristica, ui, rag)"
+        git push origin main
+        
+        # 3. Criar as duas branches a partir do mesmo ponto de main
+        git branch feature/motor-deterministico
+        git branch feature/rag
+        git push origin feature/motor-deterministico feature/rag
+        Antes do push do passo 2, três verificações (autoverificação Secção 11 — não quero que partas para trabalho pesado sobre base instável):
+        
+        Compila? mvn compile tem de passar com os esqueletos. Se algum método de stub não tiver return e o tipo não for void, não compila. Os esqueletos que dei já devolvem null/valores — confirma que aplicaste isso, senão o mvn compile falha.
+        .gitignore existe e ignora target/ e .idea/? A tua árvore mostra .idea — se isso for para o repo, polui o histórico e gera conflitos constantes entre ti e o Kaiky (cada IntelliJ escreve ficheiros diferentes lá). Confirma que tens:
+        
+        target/
+        .idea/
+        *.iml
+        
+        main protegido — combina com o Kaiky que ninguém faz push direto para main depois deste commit. A partir daqui, cada um trabalha na sua branch e integra por Pull Request. Isto protege o contrato partilhado (MotorRAG, RespostaRAG, DocumentoVetorial): qualquer mudança nesses três passa por PR aprovado pelos dois.
+        
+        Daqui para a frente, na tua branch feature/motor-deterministico, a ordem de trabalho que faz sentido:
+        ArenaClient (HTTP real — precisas dele para ver JSON verdadeiro) → mapear/confirmar as chaves no Swagger contra os modelos → MotorHeuristico (decisão sobre dados reais) → AgenteExplorador (ligar o loop) → PainelMapaCalor (visualização).
+        Confirmas que mvn compile passa e que o .gitignore está posto? Se sim, dou seguimento ao ArenaClient com implementação real do HTTP — mas só depois de me confirmares uma coisa do Swagger que ainda está em aberto e bloqueia o código: no /register e no /perceive, o robot_id e o room_id vão no path da URL (ex.: /arena/aluno_treino_2026/register) ou em query string / corpo? Pela tua descrição do Swagger parecem ir no path, mas o register recebe dois parâmetros e preciso de saber se o robot_id vai no path também ou no corpo JSON.
+
+---
+
+**PROMPT**
+
+
+
+**RESPOSTA**
 
 ---
