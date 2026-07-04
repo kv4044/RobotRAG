@@ -1223,19 +1223,211 @@
 
 **PROMPT**
 
-
+      estou testando no swagger o action segue mapeamentos das coordenadas:
+      mover_sul:  y + 1
+      mover_norte: y - 1
+      mover_oeste: x - 1
+      mover_este: x + 1
 
 **RESPOSTA**
 
+      Mapeamento confirmado por ti (não suponho):
+      
+      ```
+      MOVER_NORTE → y - 1
+      MOVER_SUL   → y + 1
+      MOVER_ESTE  → x + 1
+      MOVER_OESTE → x - 1
+      ```
+      
+      Fases 1+2 juntas: loop autónomo + anti-colisão. Dois métodos separados no `MotorHeuristico` para manter a fronteira clara (gerar intenções vs. filtrar colisões). A decisão ainda é simples — escolhe a primeira ação válida; o mapa de calor (Fase 3) entra a seguir.
+      
+      `MotorHeuristico` — Fase 2 (anti-colisão):
+      
+      ```java
+      package org.example.heuristica;
+      
+      import org.example.modelo.ObjetoFixo;
+      import org.example.modelo.Percecao;
+      
+      import java.util.ArrayList;
+      import java.util.List;
+      
+      // Cérebro determinístico. Decide a ação SOZINHO. Não faz HTTP/UI/Ollama.
+      public class MotorHeuristico {
+      
+          // As quatro intenções base. Confirmadas no Swagger.
+          private static final String[] INTENCOES = {
+                  "MOVER_NORTE", "MOVER_SUL", "MOVER_ESTE", "MOVER_OESTE"
+          };
+      
+          // Recebe a perceção e devolve a ação a executar. Por agora: primeira válida.
+          public String decidirAcao(Percecao p) {
+              List<String> validas = filtrarColisoes(p);
+              if (validas.isEmpty()) {
+                  // Cercado por muros — fica parado enviando um movimento qualquer
+                  // (o servidor bloqueia, mas não crasha). Revisto na Fase 3.
+                  return INTENCOES[0];
+              }
+              return validas.get(0);
+          }
+      
+          // Remove as intenções cujo destino colide com um muro (objetos_fixos).
+          private List<String> filtrarColisoes(Percecao p) {
+              int x = p.getO_meu_estado().getX();
+              int y = p.getO_meu_estado().getY();
+              List<String> validas = new ArrayList<>();
+      
+              for (String intencao : INTENCOES) {
+                  int destinoX = x;
+                  int destinoY = y;
+                  switch (intencao) {
+                      case "MOVER_NORTE": destinoY = y - 1; break;
+                      case "MOVER_SUL":   destinoY = y + 1; break;
+                      case "MOVER_ESTE":  destinoX = x + 1; break;
+                      case "MOVER_OESTE": destinoX = x - 1; break;
+                  }
+                  if (!haMuro(p, destinoX, destinoY)) {
+                      validas.add(intencao);
+                  }
+              }
+              return validas;
+          }
+      
+          // True se algum objeto_fixo ocupa a coordenada dada.
+          private boolean haMuro(Percecao p, int x, int y) {
+              if (p.getObjetos_fixos() == null) return false;
+              for (ObjetoFixo muro : p.getObjetos_fixos()) {
+                  if (muro.getX() == x && muro.getY() == y) {
+                      return true;
+                  }
+              }
+              return false;
+          }
+      }
+      ```
+      
+      `AgenteExplorador` — Fase 1 (loop autónomo Sense-Think-Act com anti-flood e try-catch):
+      
+      ```java
+      package org.example;
+      
+      import org.example.heuristica.MotorHeuristico;
+      import org.example.modelo.Percecao;
+      import org.example.modelo.RespostaRegisto;
+      import org.example.rede.ArenaClient;
+      
+      // Loop Sense-Think-Act 100% autónomo. Só orquestra e delega.
+      public class AgenteExplorador {
+      
+          private final ArenaClient arena = new ArenaClient(Configuracao.URL_BASE);
+          private final MotorHeuristico cerebro = new MotorHeuristico();
+      
+          public static void main(String[] args) throws Exception {
+              new AgenteExplorador().correr();
+          }
+      
+          public void correr() throws Exception {
+              RespostaRegisto reg = arena.registar(Configuracao.ROOM_ID, Configuracao.ROBOT_ID);
+              System.out.println("Registado em (" + reg.getEstado().getX() + ","
+                      + reg.getEstado().getY() + ") energia=" + reg.getEstado().getEnergia());
+      
+              while (true) {
+                  try {
+                      // SENSE
+                      Percecao p = arena.perceber(Configuracao.ROOM_ID, Configuracao.ROBOT_ID);
+      
+                      if (p.isGame_over()) {
+                          System.out.println("Jogo terminado. A desligar motores.");
+                          break;
+                      }
+                      if (!p.isGame_started()) {
+                          // Lobby: aguarda o início sem consumir a decisão.
+                          pausar();
+                          continue;
+                      }
+      
+                      // THINK
+                      String acao = cerebro.decidirAcao(p);
+      
+                      // ACT
+                      arena.agir(Configuracao.ROOM_ID, Configuracao.ROBOT_ID, acao);
+                      System.out.println("Pos=(" + p.getO_meu_estado().getX() + ","
+                              + p.getO_meu_estado().getY() + ") HP=" + p.getO_meu_estado().getEnergia()
+                              + " -> " + acao);
+      
+                  } catch (Exception e) {
+                      // Resiliência: timeouts/micro-cortes não derrubam o agente.
+                      System.out.println("Falha no turno (a retomar): " + e.getMessage());
+                  }
+                  pausar(); // anti-flood obrigatório
+              }
+          }
+      
+          // Pausa entre turnos. Margem ≥ 350-400ms para o Jitter da rede.
+          private void pausar() {
+              try {
+                  Thread.sleep(Configuracao.PAUSA_CICLO_MS);
+              } catch (InterruptedException ignored) {
+                  Thread.currentThread().interrupt();
+              }
+          }
+      }
+      ```
+      
+      Este código precisa que os modelos `Percecao` e `ObjetoFixo` já tenham os getters usados (`getO_meu_estado`, `getObjetos_fixos`, `getX`, `getY`, `isGame_over`, `isGame_started`). Se algum não existir ainda, o compilador aponta — diz-me qual e gero.
+      
+      Testa numa sala de missão. O que esperar: o robô começa a andar e **deixa de bater nas paredes** (já não recebes `status: bloqueado` por colisão). Mas ainda vais notar um problema — ele tende a andar em linha reta ou preso num canto, porque escolhe sempre a primeira válida. Isso é esperado e resolve-se na Fase 3 (mapa de calor), que faz o robô preferir zonas menos visitadas em vez da primeira opção.
+      
+      Confirmação para a Fase 3, quando lá chegares: o print acima mostra a posição da perceção **deste** turno (antes de mover). Se quiseres validar que o movimento aconteceu, o `agir()` devolve `nova_posicao` — queres que no próximo passo eu use essa resposta para atualizar/confirmar a posição em vez de esperar o próximo `/perceive`? Isso liga-se à deteção de "bloqueado", que ainda precisa da string exata que o servidor devolve quando o movimento falha. Quando apanhares um movimento bloqueado no teste, cola o JSON da resposta.
 
 ---
 
 **PROMPT**
 
-
+      getters faltantes que precisam ser gerados são no objetoFixo: getx e gety
 
 **RESPOSTA**
 
+      Getters em falta no `ObjetoFixo`. O `MotorHeuristico` usa `getX()` e `getY()`; a classe já tem os campos, faltam os acessores. Getters completos da classe (incluo os cinco campos confirmados no Swagger — `id, type, model, x, y, z` — para a classe ficar íntegra, mas só `getX`/`getY` são usados agora):
+      
+      ```java
+      package org.example.modelo;
+      
+      // Elemento de "objetos_fixos" (muros). Bloqueiam movimento E radar.
+      // Campos confirmados no Swagger: id, type, model, x, y, z.
+      public class ObjetoFixo {
+      
+          private String id;
+          private String type;
+          private String model;
+          private int x;
+          private int y;
+          private double z;
+      
+          public String getId() { return id; }
+          public void setId(String id) { this.id = id; }
+      
+          public String getType() { return type; }
+          public void setType(String type) { this.type = type; }
+      
+          public String getModel() { return model; }
+          public void setModel(String model) { this.model = model; }
+      
+          public int getX() { return x; }
+          public void setX(int x) { this.x = x; }
+      
+          public int getY() { return y; }
+          public void setY(int y) { this.y = y; }
+      
+          public double getZ() { return z; }
+          public void setZ(double z) { this.z = z; }
+      }
+      ```
+      
+      Nota: no IntelliJ podes gerar getters/setters automaticamente sem os escreveres à mão — `Alt+Insert` (ou `Code` → `Generate` → `Getter and Setter`), selecionas os campos. Útil para os restantes modelos (`Recurso`, `Cofre`, `Percecao`, etc.) à medida que forem precisos.
+      
+      Com isto o `MotorHeuristico` compila. Testa o loop autónomo + anti-colisão na sala de missão e confirma que o robô anda sem apanhar `bloqueado` por colisão. Quando validares, é o commit da Fase 1+2 (ex.: `heuristica: loop autonomo Sense-Think-Act com anti-colisao de muros`), e passamos ao mapa de calor.
 
 ---
 
