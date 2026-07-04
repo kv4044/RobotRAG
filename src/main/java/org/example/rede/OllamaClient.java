@@ -53,8 +53,32 @@ public class OllamaClient {
     }        // nomic-embed-text
 
     public String gerar(String promptChatML) throws Exception {
-        return null;
+        JsonObject options = new JsonObject();
+        options.addProperty("temperature", 0.0);
+
+        JsonObject body = new JsonObject();
+        body.addProperty("model", MODELO_LLM);
+        body.addProperty("prompt", promptChatML);
+        body.addProperty("stream", false);
+        body.add("options", options);
+
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(OLLAMA_URL + "/api/generate"))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(body.toString()))
+                .timeout(Duration.ofSeconds(60))
+                .build();
+
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+
+        if (response.statusCode() != 200) {
+            throw new RuntimeException("Ollama generate HTTP " + response.statusCode() + ": " + response.body());
+        }
+
+        JsonObject json = JsonParser.parseString(response.body()).getAsJsonObject();
+        if (!json.has("response")) {
+            throw new RuntimeException("Resposta sem campo 'response': " + response.body());
+        }
+        return json.get("response").getAsString();
     }        // qwen2.5-coder
-
-
 }
