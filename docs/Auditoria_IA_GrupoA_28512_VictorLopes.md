@@ -1433,10 +1433,35 @@
 
 **PROMPT**
 
-
+      vamos iniciar o mapa de calor, para que o robo tenha movimento inteligente e saiba onde ja pisou, e ande sempre em quadrados novos "frios"
 
 **RESPOSTA**
+      
+      Antes de escrever o mapa de calor preciso de confirmar os nomes exatos que já existem no teu código, para não inventar assinaturas/campos e partir o que já funciona na Fase 1+2. Preciso de ver:
+      
+      O método atual do MotorHeuristico que termina em return validas.get(0) — em concreto: a assinatura do método, o tipo da lista validas (é List<String> com "MOVER_NORTE" etc., ou um enum?), e como recebe o estado/posição atual.
+      O DTO do o_meu_estado — os nomes exatos dos getters da posição (ex.: getX()/getY(), ou getPosX(), ou campos aninhados). No /register a resposta trazia estado:{x,y,z,...}; confirma se o DTO do /perceive usa os mesmos nomes.
+      
+      Com isto respondido, a lógica que vou introduzir é esta (para já validar o desenho contigo):
+      
+      Campo novo no MotorHeuristico: Map<String,Integer> historicoVisitas, chave "x,y".
+      A cada passo, incrementar a contagem da coordenada atual (onde o robô está agora).
+      Para cada intenção em validas, calcular a coordenada de destino aplicando o mapeamento já confirmado:
+      
+      MOVER_NORTE → (x, y-1)
+      MOVER_SUL → (x, y+1)
+      MOVER_ESTE → (x+1, y)
+      MOVER_OESTE → (x-1, y)
+      
+      
+      Escolher a intenção cujo destino tem menor contagem em historicoVisitas (destino nunca visitado conta como 0). Isto substitui o return validas.get(0).
+      
+      Duas decisões de desenho que quero fechar contigo antes de codificar:
+      
+      Onde incrementar a visita: proponho incrementar a coordenada atual dentro do próprio MotorHeuristico no início da decisão. Alternativa: só incrementar após confirmação de "sucesso" no /action (mais correto, porque um movimento "bloqueado" não mudou a posição). Qual preferes? A segunda é mais rigorosa mas obriga a passar o feedback do /action de volta ao motor.
+      Desempate quando duas intenções têm a mesma contagem mínima: manter a ordem da lista validas, ou aleatório? A ordem fixa é determinística (melhor para auditoria e debug); o aleatório reduz padrões previsíveis. Recomendo ordem fixa nesta fase.
 
+Confirma os pontos 1 e 2 e responde às duas decisões, e escrevo o código.
 
 ---
 
