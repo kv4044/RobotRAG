@@ -1,4 +1,5 @@
 package org.example;
+import org.example.modelo.RespostaRegisto;
 import org.example.rede.ArenaClient;
 import org.example.heuristica.MotorHeuristico;
 import org.example.modelo.Percecao;
@@ -10,29 +11,16 @@ public class AgenteExplorador {
     private final MotorHeuristico cerebro = new MotorHeuristico();
     private MotorRAG rag; // injetado quando Kaiky tiver a implementação
 
-    public static void main(String[] args) throws Exception { new AgenteExplorador().correr(); }
+    public static void main(String[] args) throws Exception {
+        ArenaClient arena = new ArenaClient(Configuracao.URL_BASE);
 
-    public void correr() throws Exception {
-        arena.registar(Configuracao.ROOM_ID, Configuracao.ROBOT_ID);
-        // String manual = arena.descarregarManual(Configuracao.ROOM_ID);
-        // if (rag != null) rag.ingerirManual(manual);
+        RespostaRegisto reg = arena.registar(Configuracao.ROOM_ID, Configuracao.ROBOT_ID);
+        System.out.println("Registo: " + reg.getStatus()
+                + " em (" + reg.getEstado().getX() + "," + reg.getEstado().getY() + ")"
+                + " energia=" + reg.getEstado().getEnergia());
 
-        while (true) {
-            try {
-                Percecao p = arena.perceber(Configuracao.ROOM_ID, Configuracao.ROBOT_ID); // SENSE
-                if (p.isGame_over()) break;
-                if (!p.isGame_started()) { pausar(); continue; } // lobby
-
-                String acao = cerebro.decidirAcao(p);                                     // THINK
-                arena.agir(Configuracao.ROOM_ID, Configuracao.ROBOT_ID, acao);            // ACT
-            } catch (Exception e) {
-                // Resiliência (Secção 9): timeouts/micro-cortes não derrubam o agente.
-            }
-            pausar(); // anti-flood obrigatório
-        }
-    }
-
-    private void pausar() {
-        try { Thread.sleep(Configuracao.PAUSA_CICLO_MS); } catch (InterruptedException ignored) {}
+        Percecao p = arena.perceber(Configuracao.ROOM_ID, Configuracao.ROBOT_ID);
+        System.out.println("Perceção: pos=(" + p.getO_meu_estado().getX() + ","
+                + p.getO_meu_estado().getY() + ") game_started=" + p.isGame_started());
     }
 }

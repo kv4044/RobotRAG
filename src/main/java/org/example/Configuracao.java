@@ -5,7 +5,7 @@ public final class Configuracao {
     private Configuracao() {}
 
     public static final String URL_BASE  = "https://arena.pmonteiro.ovh";
-    public static final String ROOM_ID   = "aluno_treino_2026"; // sala Missão
+    public static final String ROOM_ID = "52508A"; // id da sala gerada (muda por sessão)
     public static final String ROBOT_ID  = "Alfa";
 
     // Física (Secção 7 — confirmada no enunciado).

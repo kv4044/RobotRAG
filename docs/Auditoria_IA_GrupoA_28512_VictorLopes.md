@@ -2,9 +2,9 @@
 
 **Aluno:** Victor Lopes — nº 28512
 
-* Este documento regista as interações que tive com a LLM 
-durante o desenvolvimento do projeto.
-Cada entrada segue o formato Prompt → Resposta.
+* Este documento regista as interações que tive com a LLM
+  durante o desenvolvimento do projeto.
+  Cada entrada segue o formato Prompt → Resposta.
 
 ---
 
@@ -16,7 +16,7 @@ Cada entrada segue o formato Prompt → Resposta.
 
 ---
 
-**PROMPT** 
+**PROMPT**
 
         analize o documento sobre o projeto final, e com base tambem no texto abaixo gere um prompt instrução base para ficar salvo na base do projeto claude para a llm sempre ler antes de gerar qualquer resposta use conhecimentos de engenharia de prompt para cria-lo
         voce é um dev senior com profundos conhecimentos em LLM, SLM, RAG, POO, ollama, java, ira planejar, desenvolver e auxiliar na criação de um robo virtual que ira jogar um jogo que esta explicado no arquivo do projeto final onde tera que ler dados do servidor e decidir o que fazer em tempo real com a apoio do ollama
@@ -26,7 +26,7 @@ Cada entrada segue o formato Prompt → Resposta.
         sempre entregue as respostas no chat nunca gere arquivos completos para ser aberto por outro aplicativo como vscode e markdown
         o codigo sera totalmente em portugues e o seu foco sera na minha parte de deterministica
 
-**RESPOSTA** 
+**RESPOSTA**
 
         Identificação para a instrução base — acrescenta como cabeçalho (topo, antes da Secção 0):
         
@@ -652,6 +652,643 @@ Cada entrada segue o formato Prompt → Resposta.
         Daqui para a frente, na tua branch feature/motor-deterministico, a ordem de trabalho que faz sentido:
         ArenaClient (HTTP real — precisas dele para ver JSON verdadeiro) → mapear/confirmar as chaves no Swagger contra os modelos → MotorHeuristico (decisão sobre dados reais) → AgenteExplorador (ligar o loop) → PainelMapaCalor (visualização).
         Confirmas que mvn compile passa e que o .gitignore está posto? Se sim, dou seguimento ao ArenaClient com implementação real do HTTP — mas só depois de me confirmares uma coisa do Swagger que ainda está em aberto e bloqueia o código: no /register e no /perceive, o robot_id e o room_id vão no path da URL (ex.: /arena/aluno_treino_2026/register) ou em query string / corpo? Pela tua descrição do Swagger parecem ir no path, mas o register recebe dois parâmetros e preciso de saber se o robot_id vai no path também ou no corpo JSON.
+
+---
+
+**PROMPT**
+
+       agora que temos os branches configurados vou começar a trabalhar na minha parte de heuristica qual os passoas s seguir o que fazer primeiro gere todo o roadmap necessario para fazer minha parte ser funcional, crieu uma versão completa de um guia aqui diretamente no chat seja sucinto e direto ao ponto com as informçaoes
+
+**RESPOSTA**  
+
+      Roadmap do motor determinístico, ordem de dependência (cada passo precisa do anterior funcional):
+      Fase 0 — Base HTTP (bloqueia tudo o resto)
+      Sem telemetria real não há o que decidir. Primeiro o ArenaClient:
+      
+      registar(roomId, robotId) → guarda a posição inicial.
+      perceber(roomId, robotId) → desserializa o JSON num objeto Percecao com Gson.
+      agir(roomId, robotId, action) → POST do movimento.
+      
+      Critério de "funcional": corres um main de teste que regista, percebe uma vez e imprime o_meu_estado no terminal. Se vês as tuas coordenadas reais, a base está de pé.
+      Bloqueio ativo: ainda não me disseste se o robot_id no /register vai no path ou no corpo. Sem isso não escrevo o registar() sem supor.
+      Fase 1 — Loop autónomo mínimo
+      No AgenteExplorador: loop while(true) com Sense-Think-Act, Thread.sleep(400) no fim, try-catch a envolver tudo. Decisão ainda burra: escolhe sempre a primeira ação válida. Objetivo é validar que o loop roda sem crashar e respeita o anti-flood. O agente já anda (mal, mas anda).
+      Fase 2 — Anti-colisão
+      Primeira inteligência real, no MotorHeuristico:
+      
+      Gera as 4 intenções (MOVER_NORTE/SUL/ESTE/OESTE).
+      Para cada uma, calcula a coordenada destino e verifica contra objetos_fixos. Remove as bloqueadas.
+      Escolhe entre as válidas.
+      
+      Critério: o robô deixa de bater nas paredes. Já não recebe "bloqueado" por colisão.
+      Fase 3 — Mapa de calor (anti-círculos)
+      
+      Map<String,Integer> historicoVisitas, chave "x,y".
+      A cada passo, incrementa a visita da coordenada atual.
+      Ao decidir, entre as válidas escolhe a de destino com menor contagem.
+      
+      Critério: o robô explora em vez de andar para trás e para a frente no mesmo corredor.
+      Fase 4 — Atração magnética
+      
+      Se há recurso ou cofre em recursos_no_mundo/cofres_no_mundo, calcula qual está mais perto (distância Manhattan) e escolhe a ação que reduz essa distância.
+      Esta regra sobrepõe-se ao mapa de calor.
+      
+      Critério: o robô desvia-se para apanhar energia e para pisar cofres, em vez de vaguear.
+      Fase 5 — Fila de ações e lista negra
+      
+      Deque<String> filaAcoesPlaneadas: no início do loop, se há ações na fila, executa-as sem passar pela heurística (reflexos).
+      Set<String> cofresFalhados: coordenadas de cofres que falharam o unlock. A atração magnética ignora-as e injeta fuga na fila.
+      
+      Critério: depois de um cofre falhar, o robô afasta-se em vez de ficar preso a tentar.
+      Fase 6 — Gestão de HP
+      
+      Lê energia de o_meu_estado.
+      Se HP baixo e há recurso visível, prioriza-o acima de tudo.
+      (Modo Batalha, mais tarde) delta de energia vs. outros_robots decide fight/flight.
+      
+      Fase 7 — Painel visual (PainelMapaCalor)
+      Só depois do cérebro funcionar. Swing/Graphics2D desenha a grelha, muros, recursos, cofres, o robô e o mapa de calor. É dashboard — não decide nada.
+      
+      Fronteira RAG: as fases 0–7 são todas tuas. O ponto de contacto com o Kaiky é só na Fase 4/5, quando o robô pisa um cofre e chamas motorRag.resolverEnigma(...). Até lá, não tocas no domínio dele.
+      Sequência de branches: uma feature pequena por PR (ex.: feature/motor-deterministico → PR "anti-colisão" → merge → PR "mapa de calor"...). Não acumules as 7 fases num PR gigante.
+      Para arrancar a Fase 0 preciso das duas confirmações do Swagger que continuam em aberto:
+      
+      No /register, robot_id vai no path (/arena/{room_id}/register/{robot_id}) ou no corpo JSON?
+      O /action — confirmas que o corpo é exatamente {room_id, robot_id, action} e que a resposta traz uma chave de status (qual o nome)?
+      
+      Responde a estas e escrevo o ArenaClient real, sem supor.
+
+---
+
+**PROMPT**
+
+      vou te passar toda a info do swagger com os response body de cada função: criei um robo com id Alfa no register e com o id de uma sala ambas info mando pelo path, recebo o seguinte json:{
+      "status": "registado",
+      "estado": {
+      "x": 4,
+      "y": 1,
+      "z": 0.4,
+      "energia": 200,
+      "cor": "#0ea5e9"
+      }
+      };
+      o action mandamos o request body com room_id, robot_id, action, e caso seja valido o movimento recebemos o seguinte json:{
+      "status": "sucesso",
+      "nova_posicao": {
+      "x": 4,
+      "y": 2,
+      "z": 0.4
+      }
+      };---
+
+**RESPOSTA**
+
+      explica como fucniona pra trabalhar em branche todo o esquema e teoria pra eu e o kaiky
+      
+      Antes de avançar para ArenaClient, faz sentido fixar isto — trabalhar mal em branches é a causa nº1 de conflitos e de histórico Git confuso (e o histórico conta na avaliação, critério 5). Explico o modelo, depois o fluxo prático.
+      
+      O modelo mental
+      Pensa no repositório como uma árvore. main é o tronco — só lá entra código que compila e está revisto. Cada um de vocês trabalha num ramo separado (feature/...), isolado do outro. Trabalham em paralelo sem se pisarem porque estão em ramos diferentes. Quando uma peça está pronta, ela volta ao tronco através de um Pull Request (PR), que é o Kaiky a olhar para o teu código antes de entrar (e vice-versa).
+      
+      A razão de isto funcionar para vocês especificamente: tu mexes em rede/ArenaClient, heuristica/, ui/; o Kaiky mexe em rede/OllamaClient e na implementação do RAG. Quase não tocam nos mesmos ficheiros — exceto o contrato partilhado (MotorRAG, RespostaRAG, DocumentoVetorial). Esses três são a fronteira sensível: mudança neles exige acordo dos dois.
+      
+      O ciclo de vida de uma feature, do início ao merge:
+      
+      V
+      
+      Conectando a visualize...
+      Os comandos de cada passo, na tua branch feature/motor-deterministico:
+      
+      1. Criar a branch (uma vez) — já fizeste isto antes. Para começar a trabalhar nela:
+      
+      git checkout feature/motor-deterministico
+      checkout muda o ramo ativo. A partir daqui, tudo o que mexes só existe neste ramo.
+      
+      2. Trabalhar — o ciclo do dia-a-dia. Programas o ArenaClient, gravas, e fazes commits pequenos e frequentes (não um gigante no fim — a avaliação penaliza isso):
+      
+      git add .
+      git commit -m "arena: implementa registar() e perceber() com HttpClient"
+      git push origin feature/motor-deterministico
+      Cada commit é um ponto de gravação. Mensagens descritivas (não "alteracoes" ou "fix"). O push envia para o GitHub para o Kaiky ver o teu progresso.
+      
+      3. Sincronizar com main antes de pedir merge. Enquanto trabalhas, o Kaiky também mete coisas em main (via PRs dele). Antes de abrires o teu PR, trazes essas mudanças para a tua branch para não haver surpresas:
+      
+      git checkout main
+      git pull origin main          # traz o que o Kaiky mergeou
+      git checkout feature/motor-deterministico
+      git merge main                # junta o trabalho dele ao teu
+      Se houver conflito (os dois mexeram na mesma linha), o Git pára e marca o ficheiro — resolves à mão, fazes git add e git commit. Resolver cedo e em pequeno é muito mais fácil do que no fim.
+      
+      4. Abrir o Pull Request. No site do GitHub, aparece um botão "Compare & pull request" depois do push. Abres PR de feature/motor-deterministico → main, descreves o que fizeste, e marcas o Kaiky como reviewer.
+      
+         5. Revisão. O Kaiky olha o teu código no PR, comenta, aprova. Tu fazes o mesmo nos PRs dele. Isto é o que protege main e o que dá histórico saudável para a avaliação (mostra colaboração real).
+      
+         6. Merge. Aprovado, carregas "Merge pull request". O teu código entra em main. A partir daí, ambos voltam ao passo 1 sincronizando com o main novo.
+      
+      As três regras que vos evitam dores de cabeça
+      A primeira: main é sagrado, ninguém faz push direto. Tudo entra por PR. Se possível, ativa "branch protection" nas definições do repo GitHub (Settings → Branches) para o Git recusar push direto a main.
+      
+      A segunda: commits pequenos e frequentes, com mensagem clara. Um commit = uma ideia completa. "implementa perceber()" é bom; "trabalho de hoje" é mau. Isto é literalmente o critério 5 da avaliação.
+      
+      A terceira, a mais importante para vocês os dois: o contrato partilhado não se toca sozinho. Os ficheiros rag/MotorRAG.java, rag/RespostaRAG.java e modelo/DocumentoVetorial.java são a fronteira entre o teu motor e o RAG do Kaiky. Se um de vocês mudar uma assinatura ali sem avisar, o código do outro deixa de compilar. Regra: qualquer alteração a esses três só por PR explicitamente combinado entre os dois. Tudo o resto (tu em rede/heuristica/ui, ele em OllamaClient e na implementação RAG) podem mexer à vontade sem se pisarem, porque são ficheiros diferentes.
+      
+      Resumo de quem mexe em quê, para fixar: tu és dono de ArenaClient, MotorHeuristico, PainelMapaCalor, AgenteExplorador, Configuracao e os modelos de telemetria; o Kaiky é dono de OllamaClient e da implementação do MotorRAG; os três ficheiros de contrato são de ambos.
+      
+      Ainda fica em aberto a pergunta que bloqueia o ArenaClient: no /register, o robot_id vai no path da URL ou no corpo JSON? Confirma no Swagger ("Try it out") e diz-me — com isso arranco o HTTP real sem supor.
+      
+      error: pathspec feature/rag did not match any file know to git
+      
+      Esse erro significa que a branch feature/rag não existe localmente — o comando que a tentou usar não a encontrou. Provavelmente o git branch feature/rag do passo anterior não chegou a correr, ou correu noutra pasta.
+      
+      Verifica primeiro o que existe:
+      
+      git branch -a
+      Isto lista todas as branches (locais e remotas, com o -a). Vê se feature/rag e feature/motor-deterministico aparecem.
+      
+      Conforme o que aparecer:
+      
+      Se nenhuma das duas existe — cria-as agora a partir de main (garante que estás em main primeiro):
+      
+      git checkout main
+      git branch feature/motor-deterministico
+      git branch feature/rag
+      git push origin feature/motor-deterministico feature/rag
+      Se existem só no remoto (aparecem como remotes/origin/feature/rag mas não a versão local) — busca e cria a local que segue a remota:
+      
+      git fetch origin
+      git checkout feature/rag
+      Se querias criar e mudar para ela de uma vez — o atalho que provavelmente tentaste:
+      
+      git checkout -b feature/rag
+      O -b cria a branch e muda para ela no mesmo comando. Sem o -b, o git checkout feature/rag assume que ela já existe — e como não existe, dá exatamente o pathspec did not match que viste.
+      
+      Nota: feature/rag é a branch do Kaiky. Quem vai trabalhar nela é ele, na máquina dele. Se estás na tua máquina, o que te interessa criar e usar é feature/motor-deterministico. A feature/rag só precisa de existir no remoto (GitHub) para o Kaiky a buscar com git fetch + git checkout feature/rag no computador dele — não precisas de a ter em checkout local.
+      
+      Corre o git branch -a e diz-me o que aparece, que confirmo o comando certo para o teu caso.
+      
+      ok agora que temos os branches configurados vou começar a trabalhar na minha parte de heuristica qual os passoas s seguir o que fazer primeiro gere todo o roadmap necessario para fazer minha parte ser funcional, crieu uma versão completa de um guia aqui diretamente no chat seja sucinto e direto ao ponto com as informçaoes
+      
+      Roadmap do motor determinístico, ordem de dependência (cada passo precisa do anterior funcional):
+      
+      Fase 0 — Base HTTP (bloqueia tudo o resto)
+      Sem telemetria real não há o que decidir. Primeiro o ArenaClient:
+      
+      registar(roomId, robotId) → guarda a posição inicial.
+      perceber(roomId, robotId) → desserializa o JSON num objeto Percecao com Gson.
+      agir(roomId, robotId, action) → POST do movimento.
+      Critério de "funcional": corres um main de teste que regista, percebe uma vez e imprime o_meu_estado no terminal. Se vês as tuas coordenadas reais, a base está de pé.
+      
+      Bloqueio ativo: ainda não me disseste se o robot_id no /register vai no path ou no corpo. Sem isso não escrevo o registar() sem supor.
+      
+      Fase 1 — Loop autónomo mínimo
+      No AgenteExplorador: loop while(true) com Sense-Think-Act, Thread.sleep(400) no fim, try-catch a envolver tudo. Decisão ainda burra: escolhe sempre a primeira ação válida. Objetivo é validar que o loop roda sem crashar e respeita o anti-flood. O agente já anda (mal, mas anda).
+      
+      Fase 2 — Anti-colisão
+      Primeira inteligência real, no MotorHeuristico:
+      
+      Gera as 4 intenções (MOVER_NORTE/SUL/ESTE/OESTE).
+      Para cada uma, calcula a coordenada destino e verifica contra objetos_fixos. Remove as bloqueadas.
+      Escolhe entre as válidas.
+      Critério: o robô deixa de bater nas paredes. Já não recebe "bloqueado" por colisão.
+      
+      Fase 3 — Mapa de calor (anti-círculos)
+      Map<String,Integer> historicoVisitas, chave "x,y".
+      A cada passo, incrementa a visita da coordenada atual.
+      Ao decidir, entre as válidas escolhe a de destino com menor contagem.
+      Critério: o robô explora em vez de andar para trás e para a frente no mesmo corredor.
+      
+      Fase 4 — Atração magnética
+      Se há recurso ou cofre em recursos_no_mundo/cofres_no_mundo, calcula qual está mais perto (distância Manhattan) e escolhe a ação que reduz essa distância.
+      Esta regra sobrepõe-se ao mapa de calor.
+      Critério: o robô desvia-se para apanhar energia e para pisar cofres, em vez de vaguear.
+      
+      Fase 5 — Fila de ações e lista negra
+      Deque<String> filaAcoesPlaneadas: no início do loop, se há ações na fila, executa-as sem passar pela heurística (reflexos).
+      Set<String> cofresFalhados: coordenadas de cofres que falharam o unlock. A atração magnética ignora-as e injeta fuga na fila.
+      Critério: depois de um cofre falhar, o robô afasta-se em vez de ficar preso a tentar.
+      
+      Fase 6 — Gestão de HP
+      Lê energia de o_meu_estado.
+      Se HP baixo e há recurso visível, prioriza-o acima de tudo.
+      (Modo Batalha, mais tarde) delta de energia vs. outros_robots decide fight/flight.
+      Fase 7 — Painel visual (PainelMapaCalor)
+      Só depois do cérebro funcionar. Swing/Graphics2D desenha a grelha, muros, recursos, cofres, o robô e o mapa de calor. É dashboard — não decide nada.
+      
+      Fronteira RAG: as fases 0–7 são todas tuas. O ponto de contacto com o Kaiky é só na Fase 4/5, quando o robô pisa um cofre e chamas motorRag.resolverEnigma(...). Até lá, não tocas no domínio dele.
+      
+      Sequência de branches: uma feature pequena por PR (ex.: feature/motor-deterministico → PR "anti-colisão" → merge → PR "mapa de calor"...). Não acumules as 7 fases num PR gigante.
+      
+      Para arrancar a Fase 0 preciso das duas confirmações do Swagger que continuam em aberto:
+      
+      No /register, robot_id vai no path (/arena/{room_id}/register/{robot_id}) ou no corpo JSON?
+      O /action — confirmas que o corpo é exatamente {room_id, robot_id, action} e que a resposta traz uma chave de status (qual o nome)?
+      Responde a estas e escrevo o ArenaClient real, sem supor.
+      
+      vou te passar toda a info do swagger com os response body de cada função: criei um robo com id Alfa no register e com o id de uma sala ambas info mando pelo path, recebo o seguinte json:{
+      "status": "registado",
+      "estado": {
+      "x": 4,
+      "y": 1,
+      "z": 0.4,
+      "energia": 200,
+      "cor": "
+      #0ea5e9"
+      }
+      };
+      o action mandamos o request body com room_id, robot_id, action, e caso seja valido o movimento recebemos o seguinte json:{
+      "status": "sucesso",
+      "nova_posicao": {
+      "x": 4,
+      "y": 2,
+      "z": 0.4
+      }
+      };
+      
+      Mostrar mais
+      Confirmado: robot_id e room_id no path do /register; /action recebe corpo {room_id, robot_id, action} e devolve {status, nova_posicao{x,y,z}}. Sem suposições — arranco a Fase 0.
+      
+      Ajuste ao modelo RespostaAcao face ao que confirmaste (tinha só status; agora tem nova_posicao):
+      
+      java
+      package org.example.modelo;
+      
+      // Resposta de /arena/action. Confirmado no Swagger: status + nova_posicao.
+      public class RespostaAcao {
+      private String status;              // ex.: "sucesso"; "bloqueado"/"eliminado" ainda por confirmar
+      private NovaPosicao nova_posicao;   // presente quando o movimento é válido
+      
+          public String getStatus() { return status; }
+          public void setStatus(String status) { this.status = status; }
+          public NovaPosicao getNova_posicao() { return nova_posicao; }
+          public void setNova_posicao(NovaPosicao nova_posicao) { this.nova_posicao = nova_posicao; }
+      
+          // Classe aninhada: a nova posição só tem x, y, z (sem energia/cor).
+          public static class NovaPosicao {
+              private int x;
+              private int y;
+              private double z;
+              public int getX() { return x; }
+              public void setX(int x) { this.x = x; }
+              public int getY() { return y; }
+              public void setY(int y) { this.y = y; }
+              public double getZ() { return z; }
+              public void setZ(double z) { this.z = z; }
+          }
+      }
+      Modelo para a resposta do /register (o corpo tem status + estado, e estado é o mesmo formato de EstadoRobot):
+      
+      java
+      package org.example.modelo;
+      
+      // Resposta de /arena/{room_id}/register/{robot_id}. Confirmado no Swagger.
+      public class RespostaRegisto {
+      private String status;       // "registado"
+      private EstadoRobot estado;  // x, y, z, energia, cor
+      
+          public String getStatus() { return status; }
+          public void setStatus(String status) { this.status = status; }
+          public EstadoRobot getEstado() { return estado; }
+          public void setEstado(EstadoRobot estado) { this.estado = estado; }
+      }
+      Agora o ArenaClient — Fase 0 real, só os 3 métodos que já podes testar (registar, perceber, agir). Deixo desbloquear e descarregarManual como stub porque ainda faltam confirmações (encoding do /unlock; formato do manual):
+      
+      java
+      package org.example.rede;
+      
+      import com.google.gson.Gson;
+      import org.example.modelo.Percecao;
+      import org.example.modelo.RespostaAcao;
+      import org.example.modelo.RespostaRegisto;
+      
+      import java.net.URI;
+      import java.net.http.HttpClient;
+      import java.net.http.HttpRequest;
+      import java.net.http.HttpResponse;
+      import java.time.Duration;
+      
+      // SÓ HTTP com a Arena. Não decide, não desenha, não fala com o Ollama.
+      public class ArenaClient {
+      
+          private final HttpClient http;
+          private final Gson gson;
+          private final String urlBase;
+      
+          public ArenaClient(String urlBase) {
+              this.urlBase = urlBase;
+              this.gson = new Gson();
+              // Timeout de ligação evita bloqueio infinito se o servidor não responder.
+              this.http = HttpClient.newBuilder()
+                      .connectTimeout(Duration.ofSeconds(5))
+                      .build();
+          }
+      
+          // POST /arena/{room_id}/register/{robot_id} — ids no path, sem corpo.
+          public RespostaRegisto registar(String roomId, String robotId) throws Exception {
+              String url = urlBase + "/arena/" + roomId + "/register/" + robotId;
+              HttpRequest req = HttpRequest.newBuilder()
+                      .uri(URI.create(url))
+                      .timeout(Duration.ofSeconds(10))
+                      .POST(HttpRequest.BodyPublishers.noBody())
+                      .build();
+              HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
+              return gson.fromJson(resp.body(), RespostaRegisto.class);
+          }
+      
+          // GET /arena/{room_id}/perceive/{robot_id} — devolve o radar completo.
+          public Percecao perceber(String roomId, String robotId) throws Exception {
+              String url = urlBase + "/arena/" + roomId + "/perceive/" + robotId;
+              HttpRequest req = HttpRequest.newBuilder()
+                      .uri(URI.create(url))
+                      .timeout(Duration.ofSeconds(10))
+                      .GET()
+                      .build();
+              HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
+              return gson.fromJson(resp.body(), Percecao.class);
+          }
+      
+          // POST /arena/action — corpo JSON {room_id, robot_id, action}.
+          public RespostaAcao agir(String roomId, String robotId, String action) throws Exception {
+              String url = urlBase + "/arena/action";
+              String corpo = gson.toJson(new PedidoAcao(roomId, robotId, action));
+              HttpRequest req = HttpRequest.newBuilder()
+                      .uri(URI.create(url))
+                      .timeout(Duration.ofSeconds(10))
+                      .header("Content-Type", "application/json")
+                      .POST(HttpRequest.BodyPublishers.ofString(corpo))
+                      .build();
+              HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
+              return gson.fromJson(resp.body(), RespostaAcao.class);
+          }
+      
+          // STUB — /unlock: encoding (path vs corpo) por confirmar no Swagger.
+          public RespostaAcao desbloquear(String roomId, String robotId, String code,
+                                          String ragChunk, String llmRaw) throws Exception {
+              throw new UnsupportedOperationException("Confirmar formato do /unlock no Swagger.");
+          }
+      
+          // STUB — /download_manual: formato de retorno (texto cru?) por confirmar.
+          public String descarregarManual(String roomId) throws Exception {
+              throw new UnsupportedOperationException("Confirmar formato do /download_manual no Swagger.");
+          }
+      
+          // Estrutura interna só para serializar o corpo do /action. Nomes = chaves JSON.
+          private static class PedidoAcao {
+              private final String room_id;
+              private final String robot_id;
+              private final String action;
+              PedidoAcao(String roomId, String robotId, String action) {
+                  this.room_id = roomId;
+                  this.robot_id = robotId;
+                  this.action = action;
+              }
+          }
+      }
+      Teste de fumo da Fase 0 — põe no AgenteExplorador temporariamente (substituis pelo loop na Fase 1). Confirma que vês as tuas coordenadas reais impressas:
+      
+      java
+      public static void main(String[] args) throws Exception {
+      ArenaClient arena = new ArenaClient(Configuracao.URL_BASE);
+      
+          RespostaRegisto reg = arena.registar(Configuracao.ROOM_ID, Configuracao.ROBOT_ID);
+          System.out.println("Registo: " + reg.getStatus()
+                  + " em (" + reg.getEstado().getX() + "," + reg.getEstado().getY() + ")"
+                  + " energia=" + reg.getEstado().getEnergia());
+      
+          Percecao p = arena.perceber(Configuracao.ROOM_ID, Configuracao.ROBOT_ID);
+          System.out.println("Perceção: pos=(" + p.getO_meu_estado().getX() + ","
+                  + p.getO_meu_estado().getY() + ") game_started=" + p.isGame_started());
+      }
+      Se isto imprimir posição e energia reais, a Fase 0 está fechada e passas à Fase 1 (loop autónomo). Commit sugerido: arena: implementa registar, perceber e agir (HTTP base confirmado no Swagger).
+      
+      Duas confirmações do Swagger que vais precisar em breve (não bloqueiam a Fase 0, mas bloqueiam a 4/5):
+      
+      Quando o /action falha (colisão ou morte), que valor vem em status? Preciso das strings exatas para tratar "bloqueado"/"eliminado".
+      A estrutura de um cofre dentro de cofres_no_mundo e o nome do campo do enigma — só aparece numa sala que tenha cofres. Quando testares numa com cofre, cola o JSON.
+
+---
+
+**PROMPT**
+
+      no codigo do AgenteExplorador esta referenciando metodos do EstadoRobot como getX, getEnergia,getY porem o estadoRobot ainda não foi codado, gere o codigo para a classe estadoRobot
+
+**RESPOSTA**
+
+      EstadoRobot mapeia o objeto estado do /register e o o_meu_estado do /perceive — ambos confirmados no Swagger com os mesmos campos (x, y, z, energia, cor). Nomes idênticos ao JSON → Gson mapeia sem anotações.
+      javapackage org.example.modelo;
+      
+      // Estado do próprio robô. Mapeia "estado" (/register) e "o_meu_estado" (/perceive).
+      // Campos confirmados no Swagger: x, y, z, energia, cor.
+      public class EstadoRobot {
+      
+          private int x;
+          private int y;
+          private double z;
+          private int energia;
+          private String cor;
+      
+          public int getX() { return x; }
+          public void setX(int x) { this.x = x; }
+      
+          public int getY() { return y; }
+          public void setY(int y) { this.y = y; }
+      
+          public double getZ() { return z; }
+          public void setZ(double z) { this.z = z; }
+      
+          public int getEnergia() { return energia; }
+          public void setEnergia(int energia) { this.energia = energia; }
+      
+          public String getCor() { return cor; }
+          public void setCor(String cor) { this.cor = cor; }
+      }
+      x e y como int porque a grelha é discreta (coordenadas inteiras nos exemplos); z como double (aparece 0.4 no JSON); energia como int (HP inteiro). Se algum destes vier com decimais noutro payload, avisa que ajusto o tipo.
+
+---
+
+**PROMPT**
+
+      ao fazer run do AgenteExplorador esta a gerar o seguinte erro: "C:\Program Files\Java\jdk-25.0.3\bin\java.exe" "-javaagent:C:\Program Files\JetBrains\IntelliJ IDEA 2026.1.1\lib\idea_rt.jar=57698" -Dfile.encoding=UTF-8 -Dsun.stdout.encoding=UTF-8 -Dsun.stderr.encoding=UTF-8 -classpath C:\Users\marco\dev\universityTomar\subjects\coding3\neymarRAG\target\classes;C:\Users\marco\.m2\repository\com\google\code\gson\gson\2.10.1\gson-2.10.1.jar org.example.AgenteExplorador
+      Exception in thread "main" com.google.gson.JsonSyntaxException: java.lang.IllegalStateException: Expected BEGIN_OBJECT but was STRING at line 1 column 1 path $
+      at com.google.gson.internal.bind.ReflectiveTypeAdapterFactory$Adapter.read(ReflectiveTypeAdapterFactory.java:397)
+      at com.google.gson.Gson.fromJson(Gson.java:1227)
+      at com.google.gson.Gson.fromJson(Gson.java:1137)
+      at com.google.gson.Gson.fromJson(Gson.java:1047)
+      at com.google.gson.Gson.fromJson(Gson.java:982)
+      at org.example.rede.ArenaClient.registar(ArenaClient.java:39)
+      at org.example.AgenteExplorador.main(AgenteExplorador.java:17)
+      Caused by: java.lang.IllegalStateException: Expected BEGIN_OBJECT but was STRING at line 1 column 1 path $
+      at com.google.gson.stream.JsonReader.beginObject(JsonReader.java:393)
+      at com.google.gson.internal.bind.ReflectiveTypeAdapterFactory$Adapter.read(ReflectiveTypeAdapterFactory.java:386)
+      ... 6 more
+      Process finished with exit code 1
+
+**RESPOSTA**
+
+      O erro diz que o Gson esperava um objeto JSON ({...}) mas recebeu uma string. Ou seja: a resposta do servidor no registar() não é o JSON {status, estado} que esperávamos — é texto simples ou um JSON diferente. Antes de corrigir o código, tenho de ver o que o servidor devolve de facto.
+      Adiciona uma linha no registar() para imprimir o corpo cru antes de desserializar:
+      javapublic RespostaRegisto registar(String roomId, String robotId) throws Exception {
+      String url = urlBase + "/arena/" + roomId + "/register/" + robotId;
+      HttpRequest req = HttpRequest.newBuilder()
+      .uri(URI.create(url))
+      .timeout(Duration.ofSeconds(10))
+      .POST(HttpRequest.BodyPublishers.noBody())
+      .build();
+      HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
+      System.out.println("STATUS HTTP: " + resp.statusCode());
+      System.out.println("CORPO CRU: " + resp.body());
+      return gson.fromJson(resp.body(), RespostaRegisto.class);
+      }
+      Corre outra vez e cola aqui o que aparece em STATUS HTTP e CORPO CRU. Isto diz-me exatamente o problema. As hipóteses mais prováveis:
+      A resposta é uma string entre aspas (ex.: "registado") em vez do objeto completo — nesse caso o teu Swagger de teste mostrou o objeto mas o endpoint real devolve outra coisa, ou o robô já estava registado e o servidor respondeu com um erro em texto.
+      O STATUS HTTP não é 200 — se for 404/422/500, o corpo é uma mensagem de erro (string ou JSON de erro), não o registo. Um 422 costuma indicar que o formato do pedido não bate certo (talvez o robot_id afinal não vá só no path, ou falte algo no corpo).
+      O robô com id Alfa já existe na sala e o servidor devolve um erro de "já registado" em vez do estado.
+      Não altero o modelo nem o parsing sem ver o corpo real — mudar às cegas seria supor. Cola o output e digo o ajuste exato.
+
+---
+
+**PROMPT**
+
+      ao fazer run no agenteexplorador recebemos error 404 desta vez, o url request que fizemos no swagger que funcionou foi https://arena.pmonteiro.ovh/arena/52508A/register?robot_id=Alfa, analize o codigo do register e veja se bate com o url que veria ser gerado
+
+**RESPOSTA**
+
+      Encontrei. O 404 diz que o URL não existe — e comparando com o que funcionou no Swagger, a diferença é clara.
+      O URL do Swagger que funcionou:
+      https://arena.pmonteiro.ovh/arena/52508A/register?robot_id=Alfa
+      O robot_id vai em query string (?robot_id=Alfa), não no path. O meu código montou /arena/{room}/register/{robot} (robot no path), que não existe → 404. Correção do registar():
+      java// POST /arena/{room_id}/register?robot_id=... — room no path, robot em query string.
+      public RespostaRegisto registar(String roomId, String robotId) throws Exception {
+      String url = urlBase + "/arena/" + roomId + "/register?robot_id=" + robotId;
+      HttpRequest req = HttpRequest.newBuilder()
+      .uri(URI.create(url))
+      .timeout(Duration.ofSeconds(10))
+      .POST(HttpRequest.BodyPublishers.noBody())
+      .build();
+      HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
+      return gson.fromJson(resp.body(), RespostaRegisto.class);
+      }
+      Isto muda uma coisa importante que assumi antes e estava errado: o robot_id não vai no path. O /perceive quase de certeza segue o mesmo padrão. Antes de corrigir o perceber(), confirma no Swagger qual foi o URL que funcionou lá — é /arena/{room}/perceive?robot_id=Alfa (query) ou /arena/{room}/perceive/Alfa (path)? Cola o URL exato que o Swagger gerou, como fizeste agora com o register, e ajusto sem supor.
+      Nota sobre room_id 52508A: no teu Swagger a sala é 52508A, mas a Configuracao tem ROOM_ID = "aluno_treino_2026". Confirma qual estás a usar de facto — se a sala de teste que criaste é 52508A, atualiza a constante, senão vais registar numa sala e testar noutra.
+      Mantém o print do corpo cru enquanto testas (System.out.println("CORPO CRU: " + resp.body())) — é o que te vai mostrar imediatamente qualquer 404 futuro em vez de rebentar no Gson.
+
+---
+
+**PROMPT**
+
+      aluno_treino_2026 é apenas a senha que usamos para gerar salas no menu da arena ai ao gerar temos uma sala com id que no caso deste teste é 52508A, no swagger do perceive temos o url https://arena.pmonteiro.ovh/arena/52508A/perceive/Alfa realmente passei-lhe info errada, refaça o perceive do arenaclient
+
+**RESPOSTA**
+
+      Confirmado: /perceive usa robot_id no path (/arena/{room}/perceive/{robot}), ao contrário do /register que usa query string. Os dois endpoints têm padrões diferentes — daí ser essencial confirmar cada um no Swagger. O perceber() que escrevi já estava correto (path), portanto não muda:
+      java// GET /arena/{room_id}/perceive/{robot_id} — ambos no path. Confirmado no Swagger.
+      public Percecao perceber(String roomId, String robotId) throws Exception {
+      String url = urlBase + "/arena/" + roomId + "/perceive/" + robotId;
+      HttpRequest req = HttpRequest.newBuilder()
+      .uri(URI.create(url))
+      .timeout(Duration.ofSeconds(10))
+      .GET()
+      .build();
+      HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
+      return gson.fromJson(resp.body(), Percecao.class);
+      }
+      O que realmente estava errado era só o registar() (robot no path em vez de query). Já corrigi isso na resposta anterior. Resumo dos padrões confirmados, para fixares:
+      /register → room no path, robot em query (?robot_id=Alfa)
+      /perceive → room e robot ambos no path (/perceive/Alfa)
+      /action → tudo no corpo JSON ({room_id, robot_id, action})
+      Corrige também a Configuracao: ROOM_ID tem de ser o id da sala gerada (52508A neste teste), não a senha aluno_treino_2026. Como o id muda cada vez que geras sala nova, na prática vais atualizar essa constante a cada sessão de teste:
+      javapublic static final String ROOM_ID = "52508A"; // id da sala gerada (muda por sessão)
+      Corre o AgenteExplorador outra vez com o registar() corrigido e o print do corpo cru ativo. Se o registo passar e o perceber() imprimir a tua posição real, a Fase 0 fecha e avanças para o loop autónomo (Fase 1). Cola o output se algo falhar.
+
+---
+
+**PROMPT**
+
+      ao rodar o agenteexplorador funciona a criação do robo na sala, ja esta a aparecer e dar print na posição, energia sendo o registo e o perceção a funcionar; vou fazer commit desta parte que ja fizemos e vamos começar a implementar as decisões do robo ao analizar o mapa para decidir qual ação tomar
+
+**RESPOSTA**
+
+      Fase 0 fechada — registo e perceção a funcionar com dados reais. Bom momento para commit.
+      
+      Sugestão de mensagem: `arena: HTTP base funcional (registar em query, perceber em path, agir em corpo)`. Antes do commit, remove os `System.out.println` de debug (`STATUS HTTP`/`CORPO CRU`) do `registar()`, ou converte-os num print condicional — não queres ruído de debug no código que vai a `main`.
+      
+      Agora as Fases 1–2. A ordem correta é: primeiro o loop autónomo mínimo (o robô anda sozinho, ainda que mal), depois a anti-colisão. Faço as duas juntas porque a Fase 1 sem a 2 anda contra paredes e não te ensina nada — mas mantenho-as como dois métodos separados para veres a fronteira.
+      
+      Antes de escrever a decisão, uma confirmação que bloqueia a anti-colisão — e não quero supor:
+      
+      **Como é o sistema de coordenadas para os movimentos?** Preciso de saber a direção exata de cada `MOVER_*` em (x,y). No teste do `/action` que fizeste, moveste de `(4,1)` para `(4,2)` — o `y` aumentou. Que movimento enviaste para obter isso? Se enviaste `MOVER_NORTE` e o `y` subiu, então Norte = y+1. Preciso desse mapeamento para calcular a coordenada destino de cada intenção e compará-la com os muros. Sem ele, a verificação de colisão fica ao contrário e o robô evita as paredes erradas.
+      
+      Confirma: que ação enviaste no teste que levou `(4,1)` → `(4,2)`? Com isso, deduzo os quatro eixos (ou testa os quatro e diz-me o resultado de cada). Assim escrevo a Fase 1+2 com o mapeamento certo à primeira.
+
+---
+
+**PROMPT**
+
+
+
+**RESPOSTA**
+
+
+---
+
+**PROMPT**
+
+
+
+**RESPOSTA**
+
+
+---
+
+**PROMPT**
+
+
+
+**RESPOSTA**
+
+
+---
+
+**PROMPT**
+
+
+
+**RESPOSTA**
+
+
+---
+
+**PROMPT**
+
+
+
+**RESPOSTA**
+
+---
+
+**PROMPT**
+
+
+
+**RESPOSTA**
+
+
+---
+
+**PROMPT**
+
+
+
+**RESPOSTA**
+
+
+---
+
+**PROMPT**
+
+
+
+**RESPOSTA**
+
 
 ---
 
