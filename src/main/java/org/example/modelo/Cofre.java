@@ -1,11 +1,15 @@
 package org.example.modelo;
-// Elemento de "cofres_no_mundo". Swagger devolveu [] → chaves do cofre NÃO
-// confirmadas (assumi padrão de Recurso por analogia). O campo do enigma
-// (terminal_desafio?) só surge em cima do cofre e tem nome DESCONHECIDO.
-// CONFIRMAR numa sala com cofre antes de desserializar e disparar o RAG.
+
+// Cofre (Terminal de Plasma) devolvido em cofres_no_mundo.
+// terminal_desafio só vem preenchido quando o robô está SOBRE o cofre.
 public class Cofre {
-    private String id; private String type; // NÃO CONFIRMADO
-    private int x; private int y; private double z;
-    // TODO: campo do enigma — nome real por confirmar.
-    // getters/setters
+    private String id;
+    private int x;
+    private int y;
+    private String terminal_desafio;
+
+    public String getId() { return id; }
+    public int getX() { return x; }
+    public int getY() { return y; }
+    public String getTerminal_desafio() { return terminal_desafio; }
 }

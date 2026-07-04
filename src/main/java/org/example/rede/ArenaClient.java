@@ -11,6 +11,8 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 
+
+
 // SÓ HTTP com a Arena. Não decide, não desenha, não fala com o Ollama.
 public class ArenaClient {
 
