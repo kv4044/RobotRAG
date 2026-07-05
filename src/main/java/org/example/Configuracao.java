@@ -5,8 +5,8 @@ public final class Configuracao {
     private Configuracao() {}
 
     public static final String URL_BASE  = "https://arena.pmonteiro.ovh";
-    public static final String ROOM_ID = "AFEEEA"; // id da sala gerada (muda por sessão)
-    public static final String ROBOT_ID  = "1";
+    public static final String ROOM_ID = "25639D"; // id da sala gerada (muda por sessão)
+    public static final String ROBOT_ID  = "kk";
 
     // modo de jogo: true = Batalha (combate on), false = Missão (combate off)
     // editar manualmente conforme a sala de teste até o menu existir
@@ -20,7 +20,4 @@ public final class Configuracao {
     // Anti-flood (Secção 9): margem ≥ 350-400 ms.
     public static final long PAUSA_CICLO_MS = 400;
 
-    // Confiança mínima do RAG para autorizar /unlock (evita -10 HP por palpite).
-    // Calibrar na sala de treino.
-    public static final double LIMIAR_SIMILARIDADE = 0.75;
 }

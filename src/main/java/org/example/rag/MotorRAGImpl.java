@@ -85,8 +85,9 @@ public class MotorRAGImpl implements MotorRAG {
 
     private boolean validar(String chave, String chunk) {
         if (chave == null) return false;
-        String chunkNormalizado = chunk.replaceAll("[^A-Za-z0-9]", "").toUpperCase();
-        return chunkNormalizado.contains(chave);
+        String chunkNorm = chunk.replaceAll("[^A-Za-z0-9]", "").toUpperCase();
+        String chaveNorm = chave.replaceAll("[^A-Za-z0-9]", "").toUpperCase();
+        return chunkNorm.contains(chaveNorm); // compara sem hífen; chaveFinal continua "XTR-99"
     }
 
     private String montarPrompt(String chunk, String enigma) {
