@@ -21,6 +21,25 @@ public class OllamaClient {
                 .build();
     }
 
+    public boolean estaDisponivel() {
+        try {
+
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(OLLAMA_URL + "/api/tags"))
+                    .GET()
+                    .timeout(Duration.ofSeconds(5))
+                    .build();
+
+            HttpResponse<String> response =
+                    httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+
+            return response.statusCode() == 200;
+
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     public double[] gerarEmbedding(String texto) throws Exception {
         JsonObject body = new JsonObject();
         body.addProperty("model", MODELO_EMBEDDING);
