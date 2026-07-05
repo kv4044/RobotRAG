@@ -3,6 +3,7 @@ package org.example;
 import org.example.heuristica.MotorHeuristico;
 import org.example.modelo.Percecao;
 import org.example.modelo.RespostaRegisto;
+import org.example.modelo.Cofre;
 import org.example.rede.ArenaClient;
 import org.example.ui.PainelMapaCalor;
 
@@ -14,7 +15,14 @@ public class AgenteExplorador {
     private final ArenaClient arena = new ArenaClient(Configuracao.URL_BASE);
     private final MotorHeuristico cerebro = new MotorHeuristico();
 
-
+    // PLACEHOLDER TEMPORÁRIO — substituir pela integração RAG+/unlock do Kaiky.
+    // Simula sempre {"status":"falha"} para o robô marcar o cofre e sair, evitando o loop.
+    private String tentarUnlockPlaceholder(Cofre cofre) {
+        System.out.println("[PLACEHOLDER] Cofre em (" + cofre.getX() + "," + cofre.getY()
+                + ") detetado. Enigma: " + cofre.getTerminal_desafio());
+        System.out.println("[PLACEHOLDER] A simular falha de unlock (RAG do Kaiky ainda nao ligado).");
+        return "falha";
+    }
 
     public static void main(String[] args) throws Exception {
         new AgenteExplorador().correr();
@@ -24,7 +32,6 @@ public class AgenteExplorador {
         RespostaRegisto reg = arena.registar(Configuracao.ROOM_ID, Configuracao.ROBOT_ID);
         System.out.println("Registado em (" + reg.getEstado().getX() + ","
                 + reg.getEstado().getY() + ") energia=" + reg.getEstado().getEnergia());
-
 
         PainelMapaCalor painel = new PainelMapaCalor(cerebro.getHistoricoVisitas());
 
@@ -49,15 +56,32 @@ public class AgenteExplorador {
                     continue;
                 }
 
-                // THINK
+                // --- Deteção de cofre e (placeholder) tentativa de desbloqueio ---
+                Cofre cofreActual = cerebro.cofreSobActual(p);
+                if (cofreActual != null) {
+                    // FRONTEIRA KAIKY: aqui entrará a chamada real ao /unlock, com a chave
+                    // gerada pelo pipeline RAG a partir de cofreActual.getTerminal_desafio().
+                    // Por agora, placeholder que simula sempre falha para quebrar o loop.
+                    String status = tentarUnlockPlaceholder(cofreActual);
+
+                    if ("falha".equals(status)) {
+                        // marca o cofre para deixar de o atrair -> quebra o loop entra/sai
+                        cerebro.registarCofreFalhado(cofreActual.getX(), cofreActual.getY());
+                    }
+                    // (quando houver "sucesso" real: opcionalmente injetar fuga na filaAcoesPlaneadas)
+                }
+
+                // THINK - decisão de movimento normal (atração já ignora cofres falhados)
                 String acao = cerebro.decidirAcao(p);
 
                 // ACT
-                arena.agir(Configuracao.ROOM_ID, Configuracao.ROBOT_ID, acao);
-                System.out.println("Pos=(" + p.getO_meu_estado().getX() + ","
-                        + p.getO_meu_estado().getY() + ") HP=" + p.getO_meu_estado().getEnergia()
-                        + " -> " + acao);
+                if (acao != null) {
+                    arena.agir(Configuracao.ROOM_ID, Configuracao.ROBOT_ID, acao);
+                    System.out.println("Pos=(" + p.getO_meu_estado().getX() + ","
+                            + p.getO_meu_estado().getY() + ") HP=" + p.getO_meu_estado().getEnergia()
+                            + " -> " + acao);
 
+                }
                 // atualiza o desenho com a posição atual do robô (dispara repaint interno)
                 painel.atualizar(p.getO_meu_estado().getX(), p.getO_meu_estado().getY());
 

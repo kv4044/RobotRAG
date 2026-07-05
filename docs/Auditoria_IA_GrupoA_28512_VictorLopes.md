@@ -1467,9 +1467,863 @@ Confirma os pontos 1 e 2 e responde às duas decisões, e escrevo o código.
 
 **PROMPT**
 
+      1. o metodo decidirAcao é List<String> com MOVER e as quatro direções
+      2. sim usa os mesmo nomes getX, getY, getEnergia
+
+**RESPOSTA**
+
+      Confirmado o essencial. Duas decisões que ficaram em aberto — assumo estes defaults (justificação em baixo); diz se queres mudar:
+      
+      - **Incremento a cada passo** (na decisão), alinhado com o teu roadmap. Mais simples; nota que um `/action` que devolva `"bloqueado"` não move o robô, logo esta versão conta uma visita "otimista". Se quiseres rigor total, movemos o incremento para depois de confirmar `"sucesso"` no `/action` (obriga a passar esse feedback ao motor — fica para quando fecharmos a string de status no Swagger).
+        - **Desempate determinístico**: com contagens iguais, fica a primeira ação pela ordem de `validas`. Melhor para auditoria/debug do que aleatório.
+      
+      Uma coisa que preciso que confirmes no teu código: dentro de `decidirAcao`, o nome da variável do estado (a que usas no `filtrarColisoes` para `getX()/getY()`). No código abaixo chamei-lhe `estado` — se for outro nome, ajusta.
+      
+      **1. Campos e helpers (topo da classe `MotorHeuristico`):**
+      
+      ```java
+      // imports necessários no topo do ficheiro
+      import java.util.HashMap;
+      import java.util.Map;
+      
+      // mapa de calor: chave "x,y" -> nº de vezes que o robô pisou essa coordenada
+      private final Map<String, Integer> historicoVisitas = new HashMap<>();
+      
+      // constrói a chave textual da coordenada para o dicionário
+      private String chave(int x, int y) {
+          return x + "," + y;
+      }
+      
+      // calcula a coordenada de destino de uma ação (mapeamento já confirmado na Fase 1+2)
+      private int[] destino(String acao, int x, int y) {
+          switch (acao) {
+              case "MOVER_NORTE": return new int[]{x, y - 1};
+              case "MOVER_SUL":   return new int[]{x, y + 1};
+              case "MOVER_ESTE":  return new int[]{x + 1, y};
+              case "MOVER_OESTE": return new int[]{x - 1, y};
+              default:            return new int[]{x, y}; // ação inesperada: não desloca
+          }
+      }
+      ```
+      
+      **2. Substituir o atual `return validas.get(0)` no fim de `decidirAcao`:**
+      
+      ```java
+      int x = estado.getX();
+      int y = estado.getY();
+      
+      // regista a passagem pela coordenada atual (mais visitas = bloco mais "quente")
+      historicoVisitas.merge(chave(x, y), 1, Integer::sum);
+      
+      // escolhe, entre as intenções válidas, a de destino mais "frio" (menos visitado)
+      String melhor = validas.get(0);
+      int menorVisitas = Integer.MAX_VALUE;
+      for (String acao : validas) {
+          int[] d = destino(acao, x, y);
+          // coordenada ainda não visitada conta como 0
+          int visitas = historicoVisitas.getOrDefault(chave(d[0], d[1]), 0);
+          if (visitas < menorVisitas) { // '<' estrito mantém a 1ª de contagem mínima (desempate determinístico)
+              menorVisitas = visitas;
+              melhor = acao;
+          }
+      }
+      return melhor;
+      ```
+      
+      Notas de desenho relevantes para defenderes na avaliação:
+      - O `historicoVisitas` é `final` e vive no `MotorHeuristico` — a memória heurística pertence ao motor, não ao `AgenteExplorador` (mantém SRP).
+        - Ainda **não** trata da atração magnética (Fase 4): quando houver recurso/cofre visível, essa rota terá de se sobrepor a este mapa de calor. Este código é o comportamento base "explorar o mais frio" que a Fase 4 vai depois override.
+
+---
+
+**PROMPT**
+
+      ja alterei o estado para p.getO_meu_estado(); ao colocar essas atualizações ao codigo a classe do motorheuristico entrega um erro: package statement is not allowed in compact source files
+
+**RESPOSTA**
+
+      O erro não vem da lógica do mapa de calor — vem de o ficheiro estar a ser interpretado como *compact source file* (funcionalidade de single-file source do Java 21+, JEP 512), onde uma classe implícita não aceita `package`.
+      
+      Causa provável: o `MotorHeuristico.java` ficou sem a declaração de classe explícita a envolver os membros, ou o `package` deixou de estar na 1ª linha. Num ficheiro normal do projeto (com `package org.example.heuristica;`) esse erro não aparece.
+      
+      Confirma que a estrutura do ficheiro é exatamente esta ordem:
+      
+      ```java
+      package org.example.heuristica; // TEM de ser a 1ª linha de código do ficheiro
+      
+      import java.util.HashMap;
+      import java.util.Map;
+      import java.util.List;
+      // (mais imports que já tinhas: o DTO do estado, etc.)
+      
+      public class MotorHeuristico {
+      
+          // mapa de calor: chave "x,y" -> nº de vezes que o robô pisou essa coordenada
+          private final Map<String, Integer> historicoVisitas = new HashMap<>();
+      
+          // ... o resto dos teus campos ...
+      
+          public String decidirAcao(/* os teus parâmetros */) {
+              // ... filtrarColisoes, etc. ...
+      
+              int x = p.getO_meu_estado().getX();
+              int y = p.getO_meu_estado().getY();
+      
+              historicoVisitas.merge(chave(x, y), 1, Integer::sum);
+      
+              String melhor = validas.get(0);
+              int menorVisitas = Integer.MAX_VALUE;
+              for (String acao : validas) {
+                  int[] d = destino(acao, x, y);
+                  int visitas = historicoVisitas.getOrDefault(chave(d[0], d[1]), 0);
+                  if (visitas < menorVisitas) {
+                      menorVisitas = visitas;
+                      melhor = acao;
+                  }
+              }
+              return melhor;
+          }
+      
+          // constrói a chave textual da coordenada
+          private String chave(int x, int y) {
+              return x + "," + y;
+          }
+      
+          // calcula a coordenada de destino de uma ação
+          private int[] destino(String acao, int x, int y) {
+              switch (acao) {
+                  case "MOVER_NORTE": return new int[]{x, y - 1};
+                  case "MOVER_SUL":   return new int[]{x, y + 1};
+                  case "MOVER_ESTE":  return new int[]{x + 1, y};
+                  case "MOVER_OESTE": return new int[]{x - 1, y};
+                  default:            return new int[]{x, y};
+              }
+          }
+      }
+      ```
+      
+      Coisas a verificar em concreto:
+      
+      1. **`package` é mesmo a 1ª linha de código?** Só pode ter comentários antes. Se ficou uma linha em branco ou um caractere invisível antes do `package`, ou se está depois dos `import`, dá esse erro em alguns compiladores.
+      
+         2. **Todos os métodos estão *dentro* do `public class MotorHeuristico { ... }`?** Se ao colar os helpers `chave` e `destino` eles ficaram *depois* da chaveta `}` de fecho da classe, o ficheiro passa a ter membros soltos ao nível do ficheiro — e é isso que o Java 21+ tenta interpretar como compact source file, disparando exatamente esta mensagem. Confirma que a `}` final está mesmo no fim do ficheiro, depois do `destino`.
+      
+         3. **Estás a compilar pela IDE (Maven/`Ctrl+F9`), não a correr o ficheiro solto?** Se acionaste "Run current file" sobre o `.java` isolado, o IntelliJ pode usar o modo single-file e recusar o `package`. Compila o projeto todo pelo painel Maven / `Build Project`.
+      
+      Cola-me a primeira linha do ficheiro e a zona à volta da última chaveta `}` se o erro persistir, para eu confirmar onde ficou o membro solto.
+
+---
+
+**PROMPT**
+
+      certo ja esta a funcional o public class nao esta ja diretamente abaixo dos imports, precisammos ainda fazer o painel ser visiverl do mapa de calor da sala
+
+**RESPOSTA**
+
+      Antes de escrever o `PainelMapaCalor`, tenho de resolver uma questão de arquitetura e confirmar dados contigo — não vou supor.
+      
+      **Questão de acesso ao `historicoVisitas` (SRP):** o painel (`PainelMapaCalor`) tem de ler o mapa de calor que vive dentro do `MotorHeuristico`. Para não quebrar encapsulamento nem criar dependência errada, proponho: o `MotorHeuristico` expõe um getter só de leitura (`Map<String,Integer> getHistoricoVisitas()`, idealmente devolvendo `Collections.unmodifiableMap(...)`), e o `AgenteExplorador` passa essa referência ao painel. O painel **só desenha** — não decide nada. Concordas com este fluxo, ou preferes outra forma de o painel obter os dados?
+      
+      **Confirmações que preciso antes de codificar o desenho:**
+      
+      1. **Coordenadas negativas / origem da grelha.** O `historicoVisitas` usa chaves `"x,y"` com os valores reais do servidor. Sabes o intervalo de coordenadas da sala (ex.: começam em 0,0 e crescem, ou há negativos)? Isto decide se desenho com offset. Se ainda não sabes, faço o painel auto-ajustável (calcula min/max das chaves em runtime) — mais robusto, e não depende de valores por confirmar no Swagger.
+      
+         2. **O que queres ver no painel, nesta fase.** Proponho o mínimo útil:
+         - grelha de células, cor por "temperatura" (mais visitas = mais quente),
+         - a posição atual do robô destacada.
+      
+         Queres já incluir muros (`objetos_fixos`) e recursos/cofres, ou nesta fase só o mapa de calor + robô? Incluir muros/recursos obriga a passar esses dados também ao painel e a confirmar os nomes das chaves no Swagger (que estão na tua lista de "por confirmar") — por isso sugiro deixá-los para depois.
+      
+         3. **A posição atual do robô** — o painel precisa dela para a destacar. Vem do mesmo `o_meu_estado` (`getX()/getY()`). Confirmas que o `AgenteExplorador` tem acesso a esse estado a cada ciclo para o passar ao painel?
+      
+      Uma nota de desenho para a auditoria: o `PainelMapaCalor` vai estender `JPanel` e conter só código Swing/`Graphics2D` (respeita o SRP — "quem desenha não decide"). O refresh do ecrã será disparado pelo `AgenteExplorador` no fim de cada ciclo Sense-Think-Act, com um `repaint()`.
+
+      Responde aos 3 pontos (e à questão do getter) e escrevo o `PainelMapaCalor` + o getter no `MotorHeuristico`.
+
+---
+
+**PROMPT**
+
+      1. a sala aparece dentro de um palno cartesiano é possivel ver que o canto inferior esquerdo sempre é gerado no 0,0 ou seja todas as posições ficam na parte do positiva do x e y
+      2. vamos fazer tudo ser visivel no mapa de inicio e mas para a frente no projeto terremos que dar valores personalizados pra casas por exemplo uma casa que tem um inimigo fazendo forntiea com ela vai ter um valor muito alto então o robo vai tentar evitar o maximo essa casa sempre indo ao menor valor algo como grafos para saber o caminho de menor custo de energia até os cofres e chaves e inimigos com pouca vida para eliminalos
+      3. sim sempre tem acesso
+
+**RESPOSTA**
+
+      Confirmado. Origem em `(0,0)` no canto inferior esquerdo, só coordenadas positivas — logo desenho sem offset, mas com **eixo Y invertido no ecrã** (em Swing o Y cresce para baixo; na arena o Y cresce para cima a partir do canto inferior esquerdo). Sinalizo já uma decisão de desenho por causa disto, em baixo.
+      
+      Sobre o ponto 2: o que descreves (custo por casa, grafos, caminho de menor custo até cofres/inimigos) é a **Fase 4 (atração magnética)** e além — vamos precisar de uma estrutura de custo por célula separada do `historicoVisitas`, não do mapa de calor puro. Nesta fase o painel desenha só o mapa de calor + robô, e fica preparado para, mais à frente, colorir por esse "custo" quando existir. Não misturo as duas coisas agora para não inventar campos.
+      
+      Preciso de fechar **uma** coisa antes de codificar, porque afeta o desenho: o painel precisa de saber o **tamanho da grelha** (largura/altura da sala) para dimensionar as células. Três opções:
+      
+      - **(A) Auto-ajuste dinâmico** — o painel calcula o max de X e Y a partir das chaves já visitadas e redimensiona à medida que o robô explora. Não depende de nenhum valor por confirmar. Desvantagem: a grelha "cresce" visualmente conforme exploras.
+        - **(B) Tamanho fixo** — se souberes as dimensões da sala (ex.: 20×20). Mais estável visualmente, mas é um valor que teria de vir do Swagger/servidor e ainda não está confirmado.
+        - **(C) Híbrido** — começa pequeno e nunca encolhe, só cresce.
+      
+      Recomendo **(A)** para esta fase (robusto, zero suposições). Confirmas A, ou sabes as dimensões da sala para usar B?
+      
+      Enquanto confirmas, adianto o **getter no `MotorHeuristico`** (necessário para o painel ler o mapa sem quebrar encapsulamento):
+      
+      ```java
+      import java.util.Collections;
+      // ... (com os restantes imports)
+      
+      // expõe o mapa de calor apenas para leitura (o painel desenha, não altera)
+      public Map<String, Integer> getHistoricoVisitas() {
+          return Collections.unmodifiableMap(historicoVisitas);
+      }
+      ```
+      
+      Nota de arquitetura para a auditoria: o painel recebe esta referência só-de-leitura e a posição atual do robô; **não** acede ao `MotorHeuristico` para decidir nada. Mantém o SRP — `MotorHeuristico` decide, `PainelMapaCalor` desenha.
+      
+      Confirma A ou B (dimensões) e escrevo o `PainelMapaCalor` completo (grelha, cor por temperatura, robô destacado, com o Y invertido para bater certo com o plano cartesiano da arena).
+
+---
+
+**PROMPT**
+
+      vamos usar a opção A ja que as salas de teste tem um tamanho padrão mas a sala do exame final vai ser diferente não temos como sbaer exatamente seu tamanho
+
+**RESPOSTA**
+
+      Opção A confirmada. Auto-ajuste dinâmico: o painel calcula o max de X e Y a partir das chaves visitadas + posição atual, e redimensiona sozinho. Zero valores hardcoded.
+      
+      Decisões de desenho (justificação para auditoria):
+      - **Y invertido** ao desenhar: na arena `(0,0)` é o canto inferior esquerdo e Y cresce para cima; em Swing Y cresce para baixo. Inverto na conversão para o ecrã bater certo com o plano cartesiano.
+        - **Célula quadrada auto-dimensionada**: tamanho = espaço disponível ÷ nº de células, para a grelha caber sempre no painel à medida que cresce.
+        - **Cor por temperatura**: interpolação do frio (visitas baixas) ao quente (visitas altas), normalizada pelo max atual de visitas. Assim a escala adapta-se sozinha.
+      
+      Preciso confirmar **um** ponto antes do código final: como é que o painel recebe a posição atual do robô? Proponho o painel guardar `xRobo`/`yRobo` e o `AgenteExplorador` chamar um `atualizar(int x, int y)` a cada ciclo (que faz `repaint()`). Confirmas esta assinatura, ou preferes passar o próprio DTO `o_meu_estado`? Passar só `int x, int y` mantém o painel desacoplado do modelo JSON (melhor SRP) — é o que recomendo.
+      
+      Assumindo isso, o `PainelMapaCalor`:
+      
+      ```java
+      package org.example.ui;
+      
+      import javax.swing.JPanel;
+      import java.awt.Color;
+      import java.awt.Graphics;
+      import java.awt.Graphics2D;
+      import java.util.Map;
+      
+      // Só desenha: recebe o mapa de calor (leitura) e a posição do robô. Não decide nada (SRP).
+      public class PainelMapaCalor extends JPanel {
+      
+          // referência só-de-leitura ao mapa de calor do MotorHeuristico
+          private final Map<String, Integer> historicoVisitas;
+      
+          // posição atual do robô (atualizada a cada ciclo pelo AgenteExplorador)
+          private int xRobo = 0;
+          private int yRobo = 0;
+      
+          public PainelMapaCalor(Map<String, Integer> historicoVisitas) {
+              this.historicoVisitas = historicoVisitas;
+              setBackground(Color.BLACK);
+          }
+      
+          // chamado pelo AgenteExplorador no fim de cada ciclo Sense-Think-Act
+          public void atualizar(int x, int y) {
+              this.xRobo = x;
+              this.yRobo = y;
+              repaint();
+          }
+      
+          @Override
+          protected void paintComponent(Graphics g) {
+              super.paintComponent(g);
+              Graphics2D g2 = (Graphics2D) g;
+      
+              // 1) descobrir as dimensões atuais da grelha (auto-ajuste dinâmico)
+              int maxX = xRobo;
+              int maxY = yRobo;
+              int maxVisitas = 1; // evita divisão por zero na normalização da cor
+              for (Map.Entry<String, Integer> e : historicoVisitas.entrySet()) {
+                  int[] c = parseChave(e.getKey());
+                  if (c[0] > maxX) maxX = c[0];
+                  if (c[1] > maxY) maxY = c[1];
+                  if (e.getValue() > maxVisitas) maxVisitas = e.getValue();
+              }
+      
+              int colunas = maxX + 1; // +1 porque as coordenadas começam em 0
+              int linhas = maxY + 1;
+      
+              // 2) tamanho da célula: cabe sempre no painel, mantendo-a quadrada
+              int lado = Math.min(getWidth() / colunas, getHeight() / linhas);
+              if (lado < 1) lado = 1;
+      
+              // 3) desenhar cada célula visitada com cor consoante a temperatura
+              for (Map.Entry<String, Integer> e : historicoVisitas.entrySet()) {
+                  int[] c = parseChave(e.getKey());
+                  g2.setColor(corTemperatura(e.getValue(), maxVisitas));
+                  int px = c[0] * lado;
+                  // Y invertido: linha 0 do ecrã corresponde ao topo, mas y=0 é o fundo da arena
+                  int py = (linhas - 1 - c[1]) * lado;
+                  g2.fillRect(px, py, lado, lado);
+              }
+      
+              // 4) grelha por cima (linhas finas) para leitura das casas
+              g2.setColor(new Color(40, 40, 40));
+              for (int i = 0; i <= colunas; i++) g2.drawLine(i * lado, 0, i * lado, linhas * lado);
+              for (int j = 0; j <= linhas; j++) g2.drawLine(0, j * lado, colunas * lado, j * lado);
+      
+              // 5) robô destacado na posição atual
+              g2.setColor(Color.CYAN);
+              int rx = xRobo * lado;
+              int ry = (linhas - 1 - yRobo) * lado;
+              g2.fillOval(rx, ry, lado, lado);
+          }
+      
+          // "x,y" -> int[]{x, y}
+          private int[] parseChave(String chave) {
+              String[] partes = chave.split(",");
+              return new int[]{ Integer.parseInt(partes[0]), Integer.parseInt(partes[1]) };
+          }
+      
+          // interpola do frio (poucas visitas) ao quente (muitas visitas)
+          private Color corTemperatura(int visitas, int maxVisitas) {
+              float t = (float) visitas / maxVisitas; // 0.0 = frio, 1.0 = quente
+              int r = (int) (t * 255);         // sobe com o calor
+              int b = (int) ((1 - t) * 255);   // desce com o calor
+              return new Color(r, 0, b);       // azul -> vermelho
+          }
+      }
+      ```
+      
+      Ligação no `AgenteExplorador` (orquestrador — só cria e delega, sem lógica de desenho):
+      
+      ```java
+      // no arranque, depois de criar o motor:
+      PainelMapaCalor painel = new PainelMapaCalor(motor.getHistoricoVisitas());
+      
+      JFrame janela = new JFrame("Mapa de Calor - NeymarRAG");
+      janela.add(painel);
+      janela.setSize(600, 600);
+      janela.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+      janela.setVisible(true);
+      
+      // dentro do loop Sense-Think-Act, no fim de cada iteração:
+      painel.atualizar(p.getO_meu_estado().getX(), p.getO_meu_estado().getY());
+      ```
+      
+      Notas:
+      - O painel partilha a **mesma referência** do `Map` do motor (via `getHistoricoVisitas()`), logo reflete sempre o estado atual sem cópias. Como é `unmodifiableMap`, o painel não lhe pode mexer.
+        - O `import` do `JFrame`/`JPanel` no `AgenteExplorador` é só para arrancar a janela; a lógica de desenho fica toda no painel (SRP mantido).
+        - Ainda sem muros/recursos/cofres no desenho — entram quando confirmares os nomes das chaves no Swagger (estão na tua lista de "por confirmar").
+
+---
+
+**PROMPT**
+
+      escreva o codigo dos import necessarios a ter no agenteexplorador do jframe e jpanel, e aonde ira ficar exatamente cada parte do codigo que me enviaste para colocar nelee
+
+**RESPOSTA**
+
+      Imports a adicionar no topo do `AgenteExplorador.java` (a seguir ao `package` e aos imports que já tens):
+      
+      ```java
+      import javax.swing.JFrame;
+      import org.example.ui.PainelMapaCalor;
+      ```
+      
+      Nota: `JPanel` **não** é preciso importar no `AgenteExplorador` — quem estende `JPanel` é o `PainelMapaCalor` (e esse import já está lá dentro). O `AgenteExplorador` só lida com `JFrame` (a janela) e com o teu `PainelMapaCalor`.
+      
+      Agora, onde colocar cada parte. Preciso de fazer referência à estrutura atual do teu `AgenteExplorador`, então indico por zonas — ajusta os nomes de variáveis (`motor`, `p`, cliente HTTP) aos que tens.
+      
+      **Zona 1 — declaração das variáveis do painel.** No método onde arranca o agente (provavelmente o `main` ou um método de arranque), **depois** de já teres criado o `MotorHeuristico` e **antes** do loop `while`:
+      
+      ```java
+      // cria o painel a partir da referência só-de-leitura do mapa de calor do motor
+      PainelMapaCalor painel = new PainelMapaCalor(motor.getHistoricoVisitas());
+      
+      // janela que aloja o painel (o orquestrador só arranca a UI, não desenha)
+      JFrame janela = new JFrame("Mapa de Calor - NeymarRAG");
+      janela.add(painel);
+      janela.setSize(600, 600);
+      janela.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+      janela.setVisible(true);
+      ```
+      
+      **Zona 2 — refresh do painel.** Dentro do loop `while`, no **fim** de cada iteração Sense-Think-Act (depois do `/action`, junto ou antes do `Thread.sleep()`), na zona onde já tens acesso ao `p` (o objeto do `/perceive` desse ciclo):
+      
+      ```java
+      // atualiza o desenho com a posição atual do robô (dispara repaint interno)
+      painel.atualizar(p.getO_meu_estado().getX(), p.getO_meu_estado().getY());
+      ```
+      
+      Ordem lógica dentro do ciclo, para orientares:
+      
+      ```
+      while (true) {
+          // 1. SENSE  -> p = arenaClient.perceive(...)
+          // 2. THINK  -> String acao = motor.decidirAcao(...)
+          // 3. ACT    -> arenaClient.action(..., acao)
+          painel.atualizar(p.getO_meu_estado().getX(), p.getO_meu_estado().getY()); // <- aqui
+          Thread.sleep(400);
+      }
+      ```
+      
+      Dois pontos a confirmares no teu código, para isto encaixar sem erro:
+      
+      1. **Escopo do `painel`.** As variáveis da Zona 1 têm de estar visíveis dentro do loop da Zona 2. Se o loop está no mesmo método do arranque, declara o `painel` como variável local antes do `while` (como acima). Se o loop está noutro método, tens de passar o `painel` como parâmetro ou guardá-lo como campo da classe — diz-me como está estruturado que ajusto.
+      
+         2. **`getHistoricoVisitas()` já existe no `MotorHeuristico`?** É o getter só-de-leitura que te passei antes. Sem ele, a Zona 1 não compila. Confirma que o adicionaste.
+
+---
+
+**PROMPT**
+
+      fazendo um run ao jogo e analizando como o robo esta a ser comportar existem agluns pontos que precisam de melhoria:
+      1. raio de visão do robo ele temm 4.5 unidades de distancia de visão ele consegue ler tudo que esta dentro desste raio contanto que uma parede nao tampa a visão no caminho; temos que fazer a atração do robo pelos terminais e recursos, o mapa de calor precisa que cada asa que ele anda ganhe um valor como 1 e todas as casas que ele não andou tenha valor 0 e os recursos tenham valor um simbolo especifico no mapa que ele precisa chegar e um valor especiaal para faze lo atrativo aquele lugar usando o minimo de energia possivel
+
+**RESPOSTA**
+
+      Este pedido é a **Fase 4 (atração magnética)**. Antes de codificar, tenho de travar em dois pontos — um é suposição de chave JSON (Secção 6), o outro é uma decisão de arquitetura que muda o desenho todo.
+      
+      **1. Nomes das chaves — por confirmar no Swagger (não hardcodeio sem isto).**
+      
+      Para o robô ser atraído por recursos e cofres, o `MotorHeuristico` precisa de os ler do `/perceive`. Da tua lista de "por confirmar" continuam em aberto:
+      
+      - **`recursos_no_mundo`**: estrutura de cada recurso. É uma lista de objetos com `getX()/getY()`? Um objeto-mapa como o `outros_robots`? Qual o nome exato dos campos de coordenada de um recurso?
+        - **`cofres_no_mundo`**: mesma pergunta — como leio as coordenadas (X,Y) de um cofre da lista?
+      
+      Sem os nomes exatos dos getters/campos não escrevo a desserialização nem o cálculo de rota. Confirma no `/docs` → "Try it out" no `/perceive` e cola-me a estrutura de **um** recurso e de **um** cofre.
+      
+      **2. Decisão de arquitetura: o "mapa de valor" é separado do `historicoVisitas`.**
+      
+      O que descreves mistura duas coisas que devem ficar separadas por SRP e por clareza:
+      
+      - **`historicoVisitas`** (o que já temos): casa andada = conta de visitas (1, 2, 3…), casa não-andada = 0/ausente. Serve para *evitar* onde já passou (mais quente = menos atrativo). Isto já funciona e não muda.
+        - **Atração** (novo): recursos e cofres *puxam* o robô. Aqui não faz sentido guardar isto no mesmo mapa das visitas — um é "custo de repetição", o outro é "prémio de destino". Juntá-los no mesmo `Map` obrigava a inverter sinais e baralhava a leitura.
+      
+      A forma limpa (e alinhada com o teu ponto "menor custo de energia até ao alvo", que é o roadmap de grafos): **quando há um recurso/cofre visível e alcançável, a rota até ao alvo sobrepõe-se ao mapa de calor** — exatamente como a Secção 8 define ("atração magnética sobrepõe-se ao mapa de calor"). O mapa de calor só decide quando **não** há alvo à vista.
+      
+      Proponho esta lógica em `decidirAcao`, por ordem de prioridade:
+      
+      1. Há recurso ou cofre visível? → escolher a intenção que **reduz a distância de Manhattan** ao alvo mais próximo (menos passos = menos HP gasto). Entre alvos, o mais próximo em Manhattan.
+         2. Não há alvo visível? → cair no mapa de calor atual (bloco adjacente mais frio).
+         3. Em ambos os casos, respeitar sempre o `filtrarColisoes` (nunca escolher direção com muro).
+      
+      Distância de Manhattan (`|Δx|+|Δy|`) é a métrica certa aqui porque o movimento é ortogonal (N/S/E/O, sem diagonais) — corresponde exatamente ao nº de passos, logo ao HP gasto. O "grafo de menor custo" completo (com casas de valor alto para inimigos, etc.) é a fase seguinte; para atração simples a recurso/cofre, Manhattan é suficiente e determinística.
+      
+      **Sobre "símbolo específico no mapa" (ponto visual):** isso é o `PainelMapaCalor` a desenhar recursos/cofres com cor/marcador próprio. Fica trivial **depois** de termos as coordenadas confirmadas (ponto 1) — o painel passa a receber também as listas de recursos/cofres e desenha-as por cima da grelha. Confirmo o desenho quando fecharmos o ponto 1.
+      
+      Duas perguntas para eu fechar o desenho da atração:
+      
+      - **Prioridade recurso vs cofre:** quando ambos estão visíveis, o robô vai ao mais próximo (Manhattan) independentemente do tipo, ou preferes sempre cofre primeiro (missão = abrir cofres) e recurso só como suporte de HP? Recomendo: alvo mais próximo por defeito, mas com cofres na **lista negra** (`cofresFalhados`) excluídos — senão ele volta sempre ao mesmo cofre falhado.
+        - **Alcance da atração:** atrai por qualquer alvo visível (dentro do raio 4.5), ou só quando está a ≤ N blocos? Recomendo: qualquer alvo visível, já que o radar só devolve o que está dentro do raio e sem oclusão — o servidor já faz esse filtro por ti.
+      
+      Responde ao ponto 1 (estrutura de recurso e de cofre no Swagger) e às duas perguntas, e escrevo o `decidirAcao` com a atração + o mapa de calor como fallback.
+
+---
+
+**PROMPT**
+
+      ele só da preferencia a hp acima dos cofre se tiver 50 ou menos de hp, qualque alvo visivel pode atrair o robo; sobre a estrutura do swagger tenho
+      
+      recursos no mundo:
+      
+      ```json
+       "recursos_no_mundo": [
+          {
+            "id": "Artefacto_Anciao_2",
+            "type": "tesouro",
+            "x": 10,
+            "y": 9,
+            "z": 0.3,
+            "coletado": false
+          }
+      ```
+      
+      não sei como ver o array do cofres_no_mundo crio uma slaa aparece 4 cofres porem no perceive apenas aparece a array vazia, nem mesmo no campo de visão os cofres aparecem o robo passou em cima de um cofre e nao detecta nada ainda
+
+**RESPOSTA**
+
+      Confirmei a instrução base. Antes de qualquer código, tenho de separar o que é implementável agora do que está bloqueado por dados em falta.
+      
+      **O que está confirmado e desbloqueado:**
+      - Regra de prioridade: recurso só ganha ao cofre quando HP ≤ 50; caso contrário qualquer alvo visível atrai; alvo mais próximo por Manhattan.
+        - `recursos_no_mundo`: lista de objetos com `x`, `y` (e `id`, `type`, `z`, `coletado`). Getters `getX()/getY()` no DTO do recurso — **confirma** que o teu DTO Gson mapeia estes campos com esses nomes.
+      
+      **O que está BLOQUEADO — e é um problema mais grave que "nome de chave":**
+      
+      `cofres_no_mundo` vem **vazio mesmo com o robô em cima do cofre**. Isto não é falta de nome de campo — é o `/perceive` a não devolver os cofres de todo. Não posso escrever a desserialização nem a atração a cofres sobre um array que nunca se preenche; seria hardcodear uma estrutura que não observei (viola a Secção 6). Possíveis causas, todas por verificar **antes** de eu codificar a parte dos cofres:
+      
+      1. Os cofres aparecem noutra chave que não `cofres_no_mundo` (o enunciado é inconsistente nos nomes — pode ser `vaults`, `cofres`, outro). No `/docs` → "Try it out" no `/perceive`, com o robô numa sala com cofres, **qual é a chave** cujo valor contém os 4 cofres? Cola o JSON de resposta cru (a secção relevante).
+         2. Os cofres só entram no payload sob condição (ex.: só quando `game_started` e o jogo em modo Missão, ou só quando pisado via um campo à parte tipo `terminal_desafio` em vez de na lista). Confirma se, ao pisar, aparece **algum** campo novo no JSON (mesmo que não seja `cofres_no_mundo`).
+         3. Bug/estado da sala de teste — os 4 cofres que vês na consola 3D podem não estar a ser expostos pela API nessa sala. Vale testar noutra sala nova.
+      
+      Sem resolver isto, **não escrevo a atração a cofres**. O que **posso** escrever já, sem supor nada, é a atração **só a recursos** (estrutura confirmada), com o desenho preparado para receber cofres quando a chave aparecer.
+      
+      Duas perguntas para eu fechar o código da atração a recursos agora:
+      
+      1. Confirmas os getters do DTO de recurso: `getX()`, `getY()` (e existe forma de saber se já foi coletado via `getColetado()`/`isColetado()`)? Pergunto porque um recurso com `coletado: true` não deve atrair — filtro-o se me confirmares o getter.
+         2. O `decidirAcao` atual — qual é a assinatura completa e como recebe o objeto do `/perceive` (o `p`)? Preciso de saber como chegar a `p.getRecursosNoMundo()` (ou o nome real do getter dessa lista) para iterar os recursos. Cola a assinatura do método e o nome do getter da lista de recursos.
+      
+      Com o ponto 1 e 2 respondidos, escrevo `decidirAcao` com: filtrar colisões → se há recurso não-coletado visível, mover na direção que reduz Manhattan ao recurso mais próximo → senão, mapa de calor (bloco mais frio). A atração a cofres e o marcador visual dos cofres ficam pendentes até o `/perceive` os devolver.
+
+---
+
+**PROMPT**
+
+      SOBRE A QUESTAO DOS COFRES
+      
+      1. o nome da array é "cofres_no_mundo": []
+         2. ao estar em cima do cofre com o robo rodei o perceive e tenho este json   "cofres_no_mundo": [
+            {
+            "id": "Terminal_Plasma_2",
+            "x": 10,
+            "y": 6,
+            "terminal_desafio": "Alerta do sistema de fluidos: Forca de compressao intoleravel detetada nas condutas de reserva. Qual o identificador do dispositivo hidraulico auxiliar que o operador deve acionar?"
+            }
+      
+      SOBRE OS RECURSOS
+      1.aparentemente quando um recurso é coletado ele é destruido da sala não aparece mas e atualiza se a array de recursos
+      2.aparentemente ele não da perceive de nada alem da posicao do proprio robo mas nada é feito com o perceive no motor heuristico faz assim através do  int x = p.getO_meu_estado().getX();
+      int y = p.getO_meu_estado().getY(); os recursos visualizo quando existe algum no raio no perceive os dados vem do perceive
+
+**RESPOSTA**
+
+      Ambas as estruturas confirmadas → atração a recursos **e** cofres desbloqueada. O array `cofres_no_mundo` estava vazio antes porque o cofre só entra no payload quando está dentro do raio com linha de visão; agora que confirmaste a estrutura com o robô em cima, dá para modelar.
+      
+      **Fronteira Kaiky (sinalizo):** o campo `terminal_desafio` é o gatilho do pipeline RAG. Detetar a posição do cofre e ser atraído por ela é o **teu** domínio (navegação) — faço isso. **Resolver** o enigma (embeddings, cosine, ChatML) é do Kaiky — não escrevo essa parte.
+      
+      **Uma reconciliação que preciso que confirmes:** pela tua convenção (`getO_meu_estado()`, campo = chave JSON literal), infiro que os getters das listas no teu DTO do `/perceive` são `getRecursos_no_mundo()` e `getCofres_no_mundo()`. Se o teu DTO do perceive ainda **não** mapeia estas listas, cria os campos abaixo; se já mapeia com outros nomes, diz-me e ajusto as chamadas.
+      
+      **1. DTOs (pacote `org.example.modelo`) — cria se não existirem:**
+      
+      ```java
+      package org.example.modelo;
+      
+      // Recurso (esfera de energia) devolvido em recursos_no_mundo
+      public class Recurso {
+          private String id;
+          private String type;
+          private int x;
+          private int y;
+          private double z;
+          private boolean coletado;
+      
+          public String getId() { return id; }
+          public String getType() { return type; }
+          public int getX() { return x; }
+          public int getY() { return y; }
+          public double getZ() { return z; }
+          public boolean isColetado() { return coletado; }
+      }
+      ```
+      
+      ```java
+      package org.example.modelo;
+      
+      // Cofre (Terminal de Plasma) devolvido em cofres_no_mundo.
+      // terminal_desafio só vem preenchido quando o robô está SOBRE o cofre.
+      public class Cofre {
+          private String id;
+          private int x;
+          private int y;
+          private String terminal_desafio;
+      
+          public String getId() { return id; }
+          public int getX() { return x; }
+          public int getY() { return y; }
+          public String getTerminal_desafio() { return terminal_desafio; }
+      }
+      ```
+      
+      **2. Campos a adicionar ao teu DTO do `/perceive`** (se ainda não os tiver):
+      
+      ```java
+      private java.util.List<org.example.modelo.Recurso> recursos_no_mundo;
+      private java.util.List<org.example.modelo.Cofre> cofres_no_mundo;
+      
+      public java.util.List<org.example.modelo.Recurso> getRecursos_no_mundo() { return recursos_no_mundo; }
+      public java.util.List<org.example.modelo.Cofre> getCofres_no_mundo() { return cofres_no_mundo; }
+      ```
+      
+      **3. `MotorHeuristico` — novos imports e campos (topo da classe):**
+      
+      ```java
+      import java.util.ArrayList;
+      import java.util.List;
+      import java.util.Set;
+      import java.util.HashSet;
+      import org.example.modelo.Recurso;
+      import org.example.modelo.Cofre;
+      
+      // coordenadas de cofres já falhados; populado na Fase 5 (após confirmar o status do /unlock no Swagger)
+      private final Set<String> cofresFalhados = new HashSet<>();
+      ```
+      
+      **4. `decidirAcao` refatorado — atração sobrepõe-se ao mapa de calor:**
+      
+      ```java
+      // ajusta o tipo/nome de 'p' ao teu DTO real do /perceive
+      public String decidirAcao(SEU_DTO_PERCEIVE p) {
+          int x = p.getO_meu_estado().getX();
+          int y = p.getO_meu_estado().getY();
+          int hp = p.getO_meu_estado().getEnergia();
+      
+          // mapa de calor: regista a passagem pela casa atual (casa andada = valor >=1; não andada = 0)
+          historicoVisitas.merge(chave(x, y), 1, Integer::sum);
+      
+          // 1) intenções base filtradas por colisões (método já existente)
+          List<String> validas = filtrarColisoes(p);
+          if (validas.isEmpty()) return null; // cercado por muros: caller não deve mover
+      
+          // 2) escolher alvo de atração (recurso ou cofre)
+          int[] alvo = escolherAlvo(p, x, y, hp);
+      
+          // 3) se há alvo, dar o passo que mais aproxima (Manhattan = nº de passos = HP gasto);
+          //    se um muro bloquear a aproximação, cai no mapa de calor para contornar
+          if (alvo != null) {
+              String acao = passoParaAlvo(validas, x, y, alvo);
+              if (acao != null) return acao;
+          }
+          return passoMaisFrio(validas, x, y);
+      }
+      
+      // devolve as coords do alvo mais atrativo, ou null se nenhum visível
+      private int[] escolherAlvo(SEU_DTO_PERCEIVE p, int x, int y, int hp) {
+          int[] recurso = maisProximo(recursosVisiveis(p), x, y);
+          int[] cofre = maisProximo(cofresVisiveis(p), x, y);
+      
+          // com HP <= 50, sobrevivência primeiro: prioriza recurso se existir
+          if (hp <= 50 && recurso != null) return recurso;
+      
+          // caso geral: qualquer alvo visível atrai; escolhe o mais próximo por Manhattan
+          if (recurso == null) return cofre;
+          if (cofre == null) return recurso;
+          int dR = manhattan(x, y, recurso[0], recurso[1]);
+          int dC = manhattan(x, y, cofre[0], cofre[1]);
+          return (dR <= dC) ? recurso : cofre;
+      }
+      
+      // recursos ainda não coletados
+      private List<int[]> recursosVisiveis(SEU_DTO_PERCEIVE p) {
+          List<int[]> r = new ArrayList<>();
+          if (p.getRecursos_no_mundo() == null) return r;
+          for (Recurso rec : p.getRecursos_no_mundo()) {
+              if (!rec.isColetado()) r.add(new int[]{rec.getX(), rec.getY()});
+          }
+          return r;
+      }
+      
+      // cofres que não estão na lista negra
+      private List<int[]> cofresVisiveis(SEU_DTO_PERCEIVE p) {
+          List<int[]> r = new ArrayList<>();
+          if (p.getCofres_no_mundo() == null) return r;
+          for (Cofre c : p.getCofres_no_mundo()) {
+              if (!cofresFalhados.contains(chave(c.getX(), c.getY()))) {
+                  r.add(new int[]{c.getX(), c.getY()});
+              }
+          }
+          return r;
+      }
+      
+      // alvo com menor distância de Manhattan; null se lista vazia
+      private int[] maisProximo(List<int[]> alvos, int x, int y) {
+          int[] melhor = null;
+          int menor = Integer.MAX_VALUE;
+          for (int[] a : alvos) {
+              int d = manhattan(x, y, a[0], a[1]);
+              if (d < menor) { menor = d; melhor = a; }
+          }
+          return melhor;
+      }
+      
+      private int manhattan(int x1, int y1, int x2, int y2) {
+          return Math.abs(x1 - x2) + Math.abs(y1 - y2);
+      }
+      
+      // entre as ações válidas, a que mais aproxima do alvo; desempate pela casa mais fria
+      private String passoParaAlvo(List<String> validas, int x, int y, int[] alvo) {
+          int distAtual = manhattan(x, y, alvo[0], alvo[1]);
+          String melhor = null;
+          int melhorDist = Integer.MAX_VALUE;
+          int melhorVisitas = Integer.MAX_VALUE;
+          for (String acao : validas) {
+              int[] d = destino(acao, x, y);
+              int dist = manhattan(d[0], d[1], alvo[0], alvo[1]);
+              if (dist >= distAtual) continue; // só passos que APROXIMAM (estrito)
+              int visitas = historicoVisitas.getOrDefault(chave(d[0], d[1]), 0);
+              if (dist < melhorDist || (dist == melhorDist && visitas < melhorVisitas)) {
+                  melhorDist = dist;
+                  melhorVisitas = visitas;
+                  melhor = acao;
+              }
+          }
+          return melhor; // null se muro impede aproximar -> fallback mapa de calor
+      }
+      
+      // bloco adjacente mais frio (comportamento base de exploração)
+      private String passoMaisFrio(List<String> validas, int x, int y) {
+          String melhor = validas.get(0);
+          int menorVisitas = Integer.MAX_VALUE;
+          for (String acao : validas) {
+              int[] d = destino(acao, x, y);
+              int visitas = historicoVisitas.getOrDefault(chave(d[0], d[1]), 0);
+              if (visitas < menorVisitas) {
+                  menorVisitas = visitas;
+                  melhor = acao;
+              }
+          }
+          return melhor;
+      }
+      ```
+      
+      Decisões (para auditoria):
+      - **Manhattan como custo**: movimento é ortogonal (N/S/E/O), logo `|Δx|+|Δy|` = nº de passos = HP gasto. Minimizar Manhattan = "mínimo de energia até ao alvo" que pediste.
+        - **Prioridade**: HP ≤ 50 → recurso primeiro (cura); caso contrário alvo mais próximo, qualquer tipo. Cofres na `cofresFalhados` são excluídos.
+        - **Fallback**: se um muro impedir aproximar do alvo, `passoParaAlvo` devolve `null` e o robô usa o mapa de calor para contornar em vez de bater na parede.
+        - **`return null`** quando `validas` está vazio (cercado): o `AgenteExplorador` tem de tratar `null` como "não mover neste turno". Confirma se o teu loop lida com isso.
+      
+      **Pendentes:**
+      - `cofresFalhados` fica vazio até confirmarmos no Swagger a string de status do `/unlock` falhado (Fase 5).
+        - Marcador visual de recursos/cofres no `PainelMapaCalor` — agora desbloqueado (coords confirmadas). Digo-te como passar essas listas ao painel quando confirmares que o item 2 (getters do perceive) bate certo com o teu DTO.
+      
+      Confirma a assinatura real de `decidirAcao` (o tipo de `p`) para eu trocar o `SEU_DTO_PERCEIVE` pelo nome certo.
+
+---
+
+**PROMPT**
+
+      ao testar novamente o robo agora na sala ele ja anda e ao ver um cofre vai em direção a ele e fica num loop andando pra dentro e fora dele, precisamos criar agora os cofresFalhados, a string devolvida de status do /unlock falhado é apenas: {
+      "status": "falha"
+      }
+
+**RESPOSTA**
+
+      Recebida a instrução base — sem alterações ao meu modo de trabalho. Foco no motor determinístico; o `/unlock` em si (submissão + o RAG que gera a chave) cruza a fronteira, sinalizo abaixo.
+      
+      **Diagnóstico do loop:** o robô é atraído ao cofre, pisa-o, mas nada o marca como "resolvido ou a evitar" → na iteração seguinte volta a ser atraído. A `cofresFalhados` resolve o lado do **falhado**, mas o loop que descreves ("dentro e fora") acontece **antes** de qualquer `/unlock** — ele entra e sai sem sequer tentar. Então há duas coisas distintas a tratar, e não quero misturá-las nem supor qual estás a implementar:
+      
+      **Fronteira Kaiky (sinalizo):** *quando* e *como* se chama o `/unlock` — construir a tentativa de chave (que exige o pipeline RAG a resolver o `terminal_desafio`) — é do Kaiky. Eu trato de: (a) detetar que estou em cima do cofre, (b) marcar o cofre como falhado quando o `/unlock` devolver `{"status":"falha"}`, (c) tirar cofres falhados da atração. **Não** escrevo a chamada ao `/unlock` nem a geração da chave.
+      
+      Isto obriga a uma decisão de fluxo que preciso que confirmes, porque muda quem chama o quê:
+      
+      O `MotorHeuristico` **não** faz HTTP (SRP — quem decide não comunica). Logo o resultado do `/unlock` (`"sucesso"`/`"falha"`) chega ao motor vindo de fora. Proponho um método público no motor para o `AgenteExplorador` o notificar:
+      
+      ```java
+      // registar_cofre_falhado: chamado pelo AgenteExplorador quando o /unlock devolve {"status":"falha"}.
+      // O motor não faz HTTP; só memoriza a coordenada para deixar de a atrair.
+      public void registarCofreFalhado(int x, int y) {
+          cofresFalhados.add(chave(x, y));
+      }
+      ```
+      
+      E o fluxo no `AgenteExplorador` (orquestrador — ele é que fala com a Arena):
+      1. Perceção → se `cofres_no_mundo` traz um cofre com as **minhas** coordenadas e `terminal_desafio` preenchido → aciona o RAG (Kaiky) → obtém chave → `arenaClient.unlock(...)`.
+         2. Lê o status: se `"falha"` → `motor.registarCofreFalhado(x, y)`. Se `"sucesso"` → (opcional) injetar fuga na `filaAcoesPlaneadas` para abandonar a área.
+      
+      **Agora o problema do loop "entra e sai sem tentar".** Isto é meu (navegação). Duas perguntas para eu não supor:
+      
+      1. **O `AgenteExplorador` já chama o `/unlock` quando piso o cofre, ou ainda não?**
+         - Se **ainda não chama** (o RAG do Kaiky não está ligado): o robô pisa, não tenta, sai, é reatraído → loop infinito. Aqui a solução **não** é `cofresFalhados` (o cofre não falhou — nunca foi tentado). É preciso uma marca de "já visitei este cofre e não o vou reprocessar até haver tentativa". Preciso de saber se queres um comportamento provisório (ex.: marcar como falhado ao pisar, só para parares o loop enquanto o RAG não está pronto) ou se o RAG já está a ser chamado.
+         - Se **já chama** e devolve `"falha"`: então `registarCofreFalhado` no fluxo acima corta o loop na próxima iteração.
+      
+         2. Quando o cofre entra na `cofresFalhados`, ele deixa de atrair (o `cofresVisiveis` já o filtra — código que te dei). Mas se o robô está **em cima** dele, todas as 4 direções afastam-se e ele vai-se embora — bom. Confirmo que o `cofresVisiveis` filtra por `cofresFalhados.contains(chave(c.getX(), c.getY()))` — isso já está no código anterior. **Confirmas que já tens esse filtro colado?**
+      
+      Responde a (1) — se o `/unlock` já é chamado ou não — porque isso decide se a marca é "falhado" (real) ou "visitado/provisório" (para parar o loop sem RAG). Não vou escrever a marca provisória como se fosse falha real sem tu confirmares, porque isso mistemas semânticas diferentes na mesma estrutura e prejudica a auditoria.
+
+---
+
+**PROMPT**
+
+      o agente explorador nao possui nada para chamar o unlock ele apenas vai ao cofre e fica no loop teria que chamar o unlock o kaiky eu apenas chego no cofre e aviso a parte dele do codigo que estamos no codigo pra ele chamar o unlock, por agora vamos fazer um placeholder que chama e da erro e marca como visitado e sai fora dele; sim o cofresVisiveis ja tem esse filtro.
+
+**RESPOSTA**
+
+      Instrução base recebida. Classificação do pedido: o loop e a marcação são **teu** domínio (navegação/memória). O `/unlock` real é fronteira Kaiky — por agora fica um **placeholder** que simula falha, conforme pediste, com o ponto de integração dele claramente marcado.
+      
+      Decisão semântica (para não misturar conceitos na auditoria): um cofre pisado mas ainda não resolvido pelo RAG **não é** um cofre "falhado" de verdade. Mas como o placeholder simula sempre falha e o efeito pretendido — parar de atrair — é idêntico, reutilizo a `cofresFalhados` **agora**, e deixo comentado que quando o `/unlock` real do Kaiky entrar, a marcação passa a depender do `{"status":"falha"}` verdadeiro em vez do placeholder. Assim não crio uma segunda estrutura só para o provisório.
+      
+      **1. `MotorHeuristico` — método de notificação (já to tinha proposto; confirma que está colado):**
+      
+      ```java
+      // registarCofreFalhado: chamado pelo AgenteExplorador quando o /unlock devolve {"status":"falha"}.
+      // O motor não faz HTTP; apenas memoriza a coordenada para deixar de a atrair (SRP).
+      public void registarCofreFalhado(int x, int y) {
+          cofresFalhados.add(chave(x, y));
+      }
+      ```
+      
+      **2. `MotorHeuristico` — helper para o orquestrador saber se está sobre um cofre ativo:**
+      
+      Preciso disto para o `AgenteExplorador` decidir quando acionar o (placeholder do) `/unlock`. O motor conhece a posição e a lista de cofres; expõe uma consulta só-de-leitura, sem fazer HTTP.
+      
+      ```java
+      // cofreSobActual: devolve o Cofre em cima do qual o robô está (coords iguais e não falhado),
+      // ou null. Serve para o orquestrador saber quando acionar o /unlock. Não faz HTTP.
+      public Cofre cofreSobActual(SEU_DTO_PERCEIVE p) {
+          int x = p.getO_meu_estado().getX();
+          int y = p.getO_meu_estado().getY();
+          if (p.getCofres_no_mundo() == null) return null;
+          for (Cofre c : p.getCofres_no_mundo()) {
+              if (c.getX() == x && c.getY() == y
+                      && !cofresFalhados.contains(chave(x, y))) {
+                  return c;
+              }
+          }
+          return null;
+      }
+      ```
+      
+      **3. `AgenteExplorador` — fluxo no loop (orquestrador chama o placeholder, lê status, notifica o motor):**
+      
+      Insere isto **depois** da Perceção (`p`) e **antes** da decisão de movimento normal (`decidirAcao`), dentro do `while`:
+      
+      ```java
+      // --- Deteção de cofre e (placeholder) tentativa de desbloqueio ---
+      Cofre cofreActual = motor.cofreSobActual(p);
+      if (cofreActual != null) {
+          // FRONTEIRA KAIKY: aqui entrará a chamada real ao /unlock, com a chave
+          // gerada pelo pipeline RAG a partir de cofreActual.getTerminal_desafio().
+          // Por agora, placeholder que simula sempre falha para quebrar o loop.
+          String status = tentarUnlockPlaceholder(cofreActual);
+      
+          if ("falha".equals(status)) {
+              // marca o cofre para deixar de o atrair -> quebra o loop entra/sai
+              motor.registarCofreFalhado(cofreActual.getX(), cofreActual.getY());
+          }
+          // (quando houver "sucesso" real: opcionalmente injetar fuga na filaAcoesPlaneadas)
+      }
+      
+      // decisão de movimento normal (atração já ignora cofres falhados)
+      String acao = motor.decidirAcao(p);
+      if (acao != null) {
+          arenaClient.action(/* room_id, robot_id, */ acao);
+      }
+      ```
+      
+      **4. `AgenteExplorador` — o placeholder (temporário; sai quando o `/unlock` do Kaiky ligar):**
+      
+      ```java
+      // PLACEHOLDER TEMPORÁRIO — substituir pela integração RAG+/unlock do Kaiky.
+      // Simula sempre {"status":"falha"} para o robô marcar o cofre e sair, evitando o loop.
+      private String tentarUnlockPlaceholder(Cofre cofre) {
+          System.out.println("[PLACEHOLDER] Cofre em (" + cofre.getX() + "," + cofre.getY()
+                  + ") detetado. Enigma: " + cofre.getTerminal_desafio());
+          System.out.println("[PLACEHOLDER] A simular falha de unlock (RAG do Kaiky ainda nao ligado).");
+          return "falha";
+      }
+      ```
+      
+      Notas:
+      - **Porque quebra o loop:** ao pisar o cofre, o placeholder marca-o em `cofresFalhados`; na iteração seguinte o `cofresVisiveis` (que já filtra por essa lista) deixa de o incluir → o robô já não é atraído → o mapa de calor empurra-o para casas mais frias, para longe.
+        - **`import` a garantir no `AgenteExplorador`:** `org.example.modelo.Cofre`.
+        - **Substitui `SEU_DTO_PERCEIVE`** pelo nome real do teu DTO do `/perceive` em `cofreSobActual`.
+        - **Custo de HP:** o placeholder **não** chama a Arena, logo não gasta os −10 HP reais do `/unlock` falhado — correto para testes, mas lembra-te que o comportamento de HP só será realista quando o `/unlock` verdadeiro entrar.
+      
+      Quando o Kaiky tiver o `/unlock` pronto, o único ponto a mexer é substituir `tentarUnlockPlaceholder(...)` pela chamada real (RAG gera chave → `arenaClient.unlock(...)` → devolve o status) — o resto do fluxo (marcação, filtro de atração) fica igual.
+
+---
+
+**PROMPT**
+
 
 
 **RESPOSTA**
+
 
 
 ---
@@ -1480,13 +2334,6 @@ Confirma os pontos 1 e 2 e responde às duas decisões, e escrevo o código.
 
 **RESPOSTA**
 
----
-
-**PROMPT**
-
-
-
-**RESPOSTA**
 
 
 ---
@@ -1498,6 +2345,17 @@ Confirma os pontos 1 e 2 e responde às duas decisões, e escrevo o código.
 **RESPOSTA**
 
 
+
+---
+
+**PROMPT**
+
+
+
+**RESPOSTA**
+
+
+
 ---
 
 **PROMPT**
@@ -1507,6 +2365,7 @@ Confirma os pontos 1 e 2 e responde às duas decisões, e escrevo o código.
 **RESPOSTA**
 
 
+
 ---
 
 **PROMPT**
@@ -1514,5 +2373,297 @@ Confirma os pontos 1 e 2 e responde às duas decisões, e escrevo o código.
 
 
 **RESPOSTA**
+
+
+
+---
+
+**PROMPT**
+
+
+
+**RESPOSTA**
+
+
+
+---
+
+**PROMPT**
+
+
+
+**RESPOSTA**
+
+
+
+---
+
+**PROMPT**
+
+
+
+**RESPOSTA**
+
+
+
+---
+
+**PROMPT**
+
+
+
+**RESPOSTA**
+
+
+
+---
+
+**PROMPT**
+
+
+
+**RESPOSTA**
+
+
+
+---
+
+**PROMPT**
+
+
+
+**RESPOSTA**
+
+
+
+---
+
+**PROMPT**
+
+
+
+**RESPOSTA**
+
+
+
+---
+
+**PROMPT**
+
+
+
+**RESPOSTA**
+
+
+
+---
+
+**PROMPT**
+
+
+
+**RESPOSTA**
+
+
+
+---
+
+**PROMPT**
+
+
+
+**RESPOSTA**
+
+
+
+---
+
+**PROMPT**
+
+
+
+**RESPOSTA**
+
+
+
+---
+
+**PROMPT**
+
+
+
+**RESPOSTA**
+
+
+
+---
+
+**PROMPT**
+
+
+
+**RESPOSTA**
+
+
+
+---
+
+**PROMPT**
+
+
+
+**RESPOSTA**
+
+
+
+---
+
+**PROMPT**
+
+
+
+**RESPOSTA**
+
+
+
+---
+
+**PROMPT**
+
+
+
+**RESPOSTA**
+
+
+
+---
+
+**PROMPT**
+
+
+
+**RESPOSTA**
+
+
+
+---
+
+**PROMPT**
+
+
+
+**RESPOSTA**
+
+
+
+---
+
+**PROMPT**
+
+
+
+**RESPOSTA**
+
+
+
+---
+
+**PROMPT**
+
+
+
+**RESPOSTA**
+
+
+
+---
+
+**PROMPT**
+
+
+
+**RESPOSTA**
+
+
+
+---
+
+**PROMPT**
+
+
+
+**RESPOSTA**
+
+
+
+---
+
+**PROMPT**
+
+
+
+**RESPOSTA**
+
+
+
+---
+
+**PROMPT**
+
+
+
+**RESPOSTA**
+
+
+
+---
+
+**PROMPT**
+
+
+
+**RESPOSTA**
+
+
+
+---
+
+**PROMPT**
+
+
+
+**RESPOSTA**
+
+
+
+---
+
+**PROMPT**
+
+
+
+**RESPOSTA**
+
+
+
+---
+
+**PROMPT**
+
+
+
+**RESPOSTA**
+
+
+
+---
+
+**PROMPT**
+
+
+
+**RESPOSTA**
+
+
 
 ---

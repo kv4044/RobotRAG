@@ -17,7 +17,29 @@ import org.example.modelo.Cofre;
     // Cérebro determinístico. Decide a ação SOZINHO. Não faz HTTP/UI/Ollama.
     public class MotorHeuristico {
 
-    // As quatro intenções base. Confirmadas no Swagger.
+    // registar_cofre_falhado: chamado pelo AgenteExplorador quando o /unlock devolve {"status":"falha"}.
+    // O motor não faz HTTP; só memoriza a coordenada para deixar de a atrair.
+    public void registarCofreFalhado(int x, int y) {
+        cofresFalhados.add(chave(x, y));
+    }
+
+    // cofreSobActual: devolve o Cofre em cima do qual o robô está (coords iguais e não falhado),
+    // ou null. Serve para o orquestrador saber quando acionar o /unlock. Não faz HTTP.
+    public Cofre cofreSobActual(Percecao p) {
+        int x = p.getO_meu_estado().getX();
+        int y = p.getO_meu_estado().getY();
+        if (p.getCofres_no_mundo() == null) return null;
+        for (Cofre c : p.getCofres_no_mundo()) {
+            if (c.getX() == x && c.getY() == y
+                    && !cofresFalhados.contains(chave(x, y))) {
+                return c;
+            }
+        }
+        return null;
+    }
+
+
+        // As quatro intenções base. Confirmadas no Swagger.
     private static final String[] INTENCOES = {
             "MOVER_NORTE", "MOVER_SUL", "MOVER_ESTE", "MOVER_OESTE"
     };
