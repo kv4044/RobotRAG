@@ -67,15 +67,59 @@ public class ArenaClient {
         return gson.fromJson(resp.body(), RespostaAcao.class);
     }
 
-    // STUB — /unlock: encoding (path vs corpo) por confirmar no Swagger.
-    public RespostaAcao desbloquear(String roomId, String robotId, String code,
-                                    String ragChunk, String llmRaw) throws Exception {
-        throw new UnsupportedOperationException("Confirmar formato do /unlock no Swagger.");
+    public String desbloquear(String roomId, String robotId, String code,
+                              String ragChunk, String llmRaw) throws Exception {
+        StringBuilder url = new StringBuilder(urlBase)
+                .append("/arena/").append(enc(roomId)).append("/unlock")
+                .append("?robot_id=").append(enc(robotId))
+                .append("&code=").append(enc(code));
+        if (ragChunk != null) url.append("&rag_chunk=").append(enc(ragChunk));
+        if (llmRaw   != null) url.append("&llm_raw=").append(enc(llmRaw));
+
+        HttpRequest req = HttpRequest.newBuilder()
+                .uri(URI.create(url.toString()))
+                .timeout(Duration.ofSeconds(10))
+                .header("accept", "application/json")
+                .POST(HttpRequest.BodyPublishers.noBody())
+                .build();
+        HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
+
+        String body = (resp.body() == null) ? "" : resp.body().trim();
+
+        // SUCESSO: 200 + body "null"/vazio -> bau desapareceu no servidor.
+        if (body.isEmpty() || "null".equals(body)) {
+            return "sucesso";
+        }
+        // NÃO-SUCESSO: extrai só o campo status do JSON.
+        com.google.gson.JsonObject j = com.google.gson.JsonParser.parseString(body).getAsJsonObject();
+        return j.has("status") ? j.get("status").getAsString() : "desconhecido";
     }
 
-    // STUB — /download_manual: formato de retorno (texto cru?) por confirmar.
+    private static String enc(String v) {
+        return java.net.URLEncoder.encode(v, java.nio.charset.StandardCharsets.UTF_8).replace("+", "%20");
+    }
+
+    // GET /arena/{room_id}/download_manual -> texto cru (uma secção por linha).
+// NÃO é JSON apesar do accept:application/json — o body vem como text/plain.
+// Devolve a String literal; o split("\n") acontece no MotorRAGImpl.ingerirManual.
     public String descarregarManual(String roomId) throws Exception {
-        throw new UnsupportedOperationException("Confirmar formato do /download_manual no Swagger.");
+        String url = urlBase + "/arena/" + roomId + "/download_manual";
+        HttpRequest req = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .timeout(Duration.ofSeconds(15))
+                .header("accept", "application/json")
+                .GET()
+                .build();
+        HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
+
+        if (resp.statusCode() != 200) {
+            throw new RuntimeException("download_manual HTTP " + resp.statusCode() + ": " + resp.body());
+        }
+        String body = resp.body();
+        if (body == null || body.isBlank()) {
+            throw new RuntimeException("Manual vazio devolvido pelo servidor.");
+        }
+        return body; // texto cru; ingestão trata o chunking
     }
 
     // Estrutura interna só para serializar o corpo do /action. Nomes = chaves JSON.
