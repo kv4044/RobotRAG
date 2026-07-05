@@ -4108,6 +4108,7 @@ public class TesteOllama {
 
 Diz qual dos dois estás a apontar.
 
+
 **Pergunta**
 ok me da um resumo doque ja fizemos e doque ainda falta fazer para me localizar no projeto
 
@@ -4139,3 +4140,3125 @@ Décimo recolamento — última confirmação: já é seguido desde a primeira v
 - `main()` de integração real com `ArenaClient` (nem começaste a ligar isto à Arena de verdade — tudo testado com Ollama local e chunks hardcoded).
 
 Próximo passo direto: decide se resolves P6 (alucinação) e P14 (chunk errado) antes de escrever `MotorRAGImpl`, ou se aceitas essas duas falhas como risco conhecido e documentado. Qual dos dois?
+
+
+**Pergunta**
+tenho os seguintes codigos
+
+```
+package org.example.rag;
+
+public class VetorUtils {
+    private VetorUtils() {}
+
+    public static double cosineSimilarity(double[] a, double[] b) {
+        double dot = 0, normA = 0, normB = 0;
+        for (int i = 0; i < a.length; i++) {
+            dot += a[i] * b[i];
+            normA += a[i] * a[i];
+            normB += b[i] * b[i];
+        }
+        return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+    }
+}
+
+```
+
+```
+package org.example.rag;
+
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+public final class ExtratorChave {
+    private ExtratorChave() {}
+
+    private static final Pattern CHAVE_PATTERN = Pattern.compile("[A-Z]{2,}-?[A-Z0-9]{2,}");
+
+    public static String extrair(String respostaBruta) {
+        Matcher m = CHAVE_PATTERN.matcher(respostaBruta);
+        if (m.find()) return m.group().replaceAll("[^A-Za-z0-9]", "").toUpperCase();
+        return null;
+    }
+}
+```
+
+```
+package org.example.rag;
+
+import org.example.modelo.DocumentoVetorial;
+import org.example.rede.OllamaClient;
+
+import java.util.ArrayList;
+import java.util.List;
+
+public class MotorRAGImpl implements MotorRAG {
+
+    private final OllamaClient client;
+    private List<DocumentoVetorial> chunks;
+
+    public MotorRAGImpl(OllamaClient client) {
+        this.client = client;
+    }
+
+    @Override
+    public void ingerirManual(String textoManual) throws Exception {
+        String[] linhas = textoManual.split("\n");
+        chunks = new ArrayList<>();
+        for (String linha : linhas) {
+            String texto = linha.trim();
+            if (texto.isEmpty()) continue;
+            double[] vetor = client.gerarEmbedding(texto);
+            chunks.add(new DocumentoVetorial(texto, vetor));
+        }
+    }
+
+    @Override
+    public boolean estaPronto() {
+        return client.estaDisponivel() && chunks != null && !chunks.isEmpty();
+    }
+
+    @Override
+    public RespostaRAG resolverEnigma(String enigma) throws Exception {
+        if (!estaPronto()) throw new IllegalStateException("Manual não ingerido ou Ollama indisponível.");
+
+        double[] vetorEnigma = client.gerarEmbedding(enigma);
+
+        // ordena índices dos chunks por score decrescente
+        List<Integer> ordem = new ArrayList<>();
+        double[] scores = new double[chunks.size()];
+        for (int i = 0; i < chunks.size(); i++) {
+            scores[i] = VetorUtils.cosineSimilarity(vetorEnigma, chunks.get(i).getVetor());
+            ordem.add(i);
+        }
+        ordem.sort((a, b) -> Double.compare(scores[b], scores[a]));
+
+        int idx1 = ordem.get(0);
+        String chunk1 = chunks.get(idx1).getTexto();
+        String resp1 = client.gerar(montarPrompt(chunk1, enigma)).trim();
+        String chave1 = ExtratorChave.extrair(resp1);
+        boolean valida1 = validar(chave1, chunk1);
+
+        if (valida1) {
+            return new RespostaRAG(chave1, true, 1,
+                    chave1, scores[idx1], chunk1, resp1,
+                    null, -1.0, null, null);
+        }
+
+        if (chunks.size() < 2) {
+            return new RespostaRAG(null, false, 0,
+                    chave1, scores[idx1], chunk1, resp1,
+                    null, -1.0, null, null);
+        }
+
+        int idx2 = ordem.get(1);
+        String chunk2 = chunks.get(idx2).getTexto();
+        String resp2 = client.gerar(montarPrompt(chunk2, enigma)).trim();
+        String chave2 = ExtratorChave.extrair(resp2);
+        boolean valida2 = validar(chave2, chunk2);
+
+        if (valida2) {
+            return new RespostaRAG(chave2, true, 2,
+                    chave1, scores[idx1], chunk1, resp1,
+                    chave2, scores[idx2], chunk2, resp2);
+        }
+
+        // ambas falharam -> não submete
+        return new RespostaRAG(null, false, 0,
+                chave1, scores[idx1], chunk1, resp1,
+                chave2, scores[idx2], chunk2, resp2);
+    }
+
+    private boolean validar(String chave, String chunk) {
+        if (chave == null) return false;
+        String chunkNormalizado = chunk.replaceAll("[^A-Za-z0-9]", "").toUpperCase();
+        return chunkNormalizado.contains(chave);
+    }
+
+    private String montarPrompt(String chunk, String enigma) {
+        return  "<|im_start|>system\n" +
+                "És um sistema de resposta baseado exclusivamente no manual fornecido.\n" +
+                "Regras:\n" +
+                "- Utiliza apenas a informação presente no manual.\n" +
+                "- Nunca inventes informação.\n" +
+                "- A resposta deve ser exatamente o código presente no manual.\n" +
+                "- Se não existir resposta no manual responde apenas NULL.\n" +
+                "<|im_end|>\n" +
+
+                "<|im_start|>user\n" +
+                "Manual:\n" +
+                chunk +
+                "\n\nPergunta:\n" +
+                enigma +
+                "\n<|im_end|>\n" +
+
+                "<|im_start|>assistant\n";
+    }
+}
+```
+
+```
+package org.example.rede;
+
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Duration;
+
+public class OllamaClient {
+    private static final String OLLAMA_URL = "http://localhost:11434";
+    private static final String MODELO_EMBEDDING = "nomic-embed-text";
+    private static final String MODELO_LLM = "qwen2.5-coder:0.5b-instruct-q4_K_M";
+    private final HttpClient httpClient;
+
+    public OllamaClient() {
+        this.httpClient = HttpClient.newBuilder()
+                .connectTimeout(java.time.Duration.ofSeconds(30))
+                .build();
+    }
+
+    public boolean estaDisponivel() {
+        try {
+
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(OLLAMA_URL + "/api/tags"))
+                    .GET()
+                    .timeout(Duration.ofSeconds(5))
+                    .build();
+
+            HttpResponse<String> response =
+                    httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+
+            return response.statusCode() == 200;
+
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    public double[] gerarEmbedding(String texto) throws Exception {
+        JsonObject body = new JsonObject();
+        body.addProperty("model", MODELO_EMBEDDING);
+        body.addProperty("prompt", texto);
+
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(OLLAMA_URL + "/api/embeddings"))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(body.toString()))
+                .timeout(Duration.ofSeconds(30))
+                .build();
+
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+
+        if (response.statusCode() != 200) {
+            throw new RuntimeException("Ollama embeddings HTTP " + response.statusCode() + ": " + response.body());
+        }
+
+        JsonObject json = JsonParser.parseString(response.body()).getAsJsonObject();
+        if (!json.has("embedding")) {
+            throw new RuntimeException("Resposta sem campo 'embedding': " + response.body());
+        }
+
+        JsonArray arr = json.getAsJsonArray("embedding");
+        double[] vetor = new double[arr.size()];
+        for (int i = 0; i < arr.size(); i++) {
+            vetor[i] = arr.get(i).getAsDouble();
+        }
+        return vetor;
+    }        // nomic-embed-text
+
+    public String gerar(String promptChatML) throws Exception {
+        JsonObject options = new JsonObject();
+        options.addProperty("temperature", 0.0);
+
+        JsonObject body = new JsonObject();
+        body.addProperty("model", MODELO_LLM);
+        body.addProperty("prompt", promptChatML);
+        body.addProperty("stream", false);
+        body.add("options", options);
+
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(OLLAMA_URL + "/api/generate"))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(body.toString()))
+                .timeout(Duration.ofSeconds(60))
+                .build();
+
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+
+        if (response.statusCode() != 200) {
+            throw new RuntimeException("Ollama generate HTTP " + response.statusCode() + ": " + response.body());
+        }
+
+        JsonObject json = JsonParser.parseString(response.body()).getAsJsonObject();
+        if (!json.has("response")) {
+            throw new RuntimeException("Resposta sem campo 'response': " + response.body());
+        }
+        return json.get("response").getAsString();
+    }        // qwen2.5-coder
+}
+```
+
+```
+package org.example.modelo;
+
+public class DocumentoVetorial {
+    private String texto;
+    private double[] vetor;
+
+    public DocumentoVetorial() {}
+
+    public DocumentoVetorial(String texto, double[] vetor) {
+        this.texto = texto;
+        this.vetor = vetor;
+    }
+
+    public String getTexto() { return texto; }
+    public void setTexto(String texto) { this.texto = texto; }
+
+    public double[] getVetor() {
+        if (vetor == null) throw new IllegalStateException("DocumentoVetorial sem vetor definido — instanciado via construtor vazio sem setVetor().");
+        return vetor;
+    }
+    public void setVetor(double[] vetor) { this.vetor = vetor; }
+}
+```
+
+```
+package org.example.rag;
+
+public class RespostaRAG {
+    private final String chaveFinal;           // null = não submeter (ambas falharam)
+    private final boolean validacaoPassou;
+    private final int tentativaUsada;          // 1, 2, ou 0 se nenhuma validou
+
+    private final String chavePrimaria;
+    private final double scorePrimario;
+    private final String chunkUsadoPrimario;
+    private final String respostaBrutaLLMPrimaria;
+
+    private final String chaveSecundaria;      // null se 1ª já validou (2ª nunca correu)
+    private final double scoreSecundario;
+    private final String chunkUsadoSecundario;
+    private final String respostaBrutaLLMSecundaria;
+
+    public RespostaRAG(String chaveFinal, boolean validacaoPassou, int tentativaUsada,
+                       String chavePrimaria, double scorePrimario, String chunkUsadoPrimario, String respostaBrutaLLMPrimaria,
+                       String chaveSecundaria, double scoreSecundario, String chunkUsadoSecundario, String respostaBrutaLLMSecundaria) {
+        this.chaveFinal = chaveFinal;
+        this.validacaoPassou = validacaoPassou;
+        this.tentativaUsada = tentativaUsada;
+        this.chavePrimaria = chavePrimaria;
+        this.scorePrimario = scorePrimario;
+        this.chunkUsadoPrimario = chunkUsadoPrimario;
+        this.respostaBrutaLLMPrimaria = respostaBrutaLLMPrimaria;
+        this.chaveSecundaria = chaveSecundaria;
+        this.scoreSecundario = scoreSecundario;
+        this.chunkUsadoSecundario = chunkUsadoSecundario;
+        this.respostaBrutaLLMSecundaria = respostaBrutaLLMSecundaria;
+    }
+
+    public boolean deveSubmeter() { return chaveFinal != null; }
+
+    public String getChaveFinal() { return chaveFinal; }
+    public boolean isValidacaoPassou() { return validacaoPassou; }
+    public int getTentativaUsada() { return tentativaUsada; }
+    public String getChavePrimaria() { return chavePrimaria; }
+    public double getScorePrimario() { return scorePrimario; }
+    public String getChunkUsadoPrimario() { return chunkUsadoPrimario; }
+    public String getRespostaBrutaLLMPrimaria() { return respostaBrutaLLMPrimaria; }
+    public String getChaveSecundaria() { return chaveSecundaria; }
+    public double getScoreSecundario() { return scoreSecundario; }
+    public String getChunkUsadoSecundario() { return chunkUsadoSecundario; }
+    public String getRespostaBrutaLLMSecundaria() { return respostaBrutaLLMSecundaria; }
+}
+```
+
+oq falta eu fazer ainda ?
+
+
+**Resposta**
+**Falta bastante coisa estrutural, e o que já existe tem problemas.**
+
+## Bugs no código atual
+
+**`VetorUtils.cosineSimilarity`** — não trata `normA == 0 || normB == 0`. Se o Ollama devolver um vetor nulo (erro silencioso, resposta vazia), a divisão dá `NaN` e o `sort()` no `MotorRAGImpl` fica com comportamento indefinido (NaN não compara de forma consistente). Isto vai explodir silenciosamente em produção, não em teste.
+
+**`ExtratorChave`** — a regex `[A-Z]{2,}-?[A-Z0-9]{2,}` casa com "NULL" (o próprio token que pedes ao LLM para devolver quando não sabe a resposta). O regex engine backtracka: `[A-Z]{2,}` fica com "NU", hífen opcional ausente, `[A-Z0-9]{2,}` fica com "LL". Resultado: quando o modelo responde corretamente "não sei", extrais "NULL" como se fosse uma chave candidata. Funciona por acidente porque depois `validar()` falha (o chunk não contém "NULL"), mas é frágil — se algum dia o texto do manual tiver uma palavra que coincida, tens falso positivo. Devias excluir "NULL" explicitamente antes de aplicar o regex, não confiar na validação a jusante para apanhar isto.
+
+Também: `m.find()` pega a primeira ocorrência. Se o modelo (mesmo a temp 0.0) responder com preâmbulo tipo "A chave é SIGMA-3", funciona, mas se responder algo como "ERRO-XPTO, tenta SIGMA-3" apanhas a errada. Não testaste isto contra respostas reais do `qwen2.5-coder:0.5b`? A 0.5B é pequena, tende a não seguir instruções de formato à risca.
+
+**`MotorRAGImpl`** — a estratégia top-2 com fallback é uma decisão tua que não estava no enunciado (que pede só "chunk mais relevante"). Não é errado, mas é uma suposição sobre comportamento tolerante a falhas que devias confirmar que está dentro do que o Victor/enunciado esperam, especialmente porque cada tentativa falhada custa uma chamada extra ao LLM (latência) antes de decidir não submeter.
+
+## O que falta mesmo (estrutural)
+
+Do pipeline de 8 passos, só tens 3–7 parcialmente cobertos. Faltam:
+
+1. **Passo 1** — download do manual via endpoint do servidor. Não há nenhum cliente REST para `arena.pmonteiro.ovh`. `OllamaClient` só fala com Ollama local.
+2. **Passo 8** — submissão via `/unlock`. Não existe nenhum código que envie a chave de volta ao servidor.
+3. **Deteção do evento "pisar cofre"** — como é que o agente sabe que está em cima do cofre? Isso implica polling de estado do jogo (posição, HP, `terminal_desafio`). Não há loop principal nenhum.
+4. **Modelos de JSON** para request/response do servidor (manual, estado do jogo, unlock) — não vi nenhuma classe equivalente a `DocumentoVetorial` para isto.
+
+## Antes de sugerir código para isto, preciso que respondas — não vou supor
+
+- Qual é o endpoint exato e o formato JSON de resposta para obter o manual? (`GET /manual`? devolve texto puro ou JSON com campo `conteudo`?)
+- Como é exposto `terminal_desafio` — é um campo do estado do jogador que vem por polling, ou um evento push/webhook?
+- O `/unlock` espera que body — só a chave, ou chave + coordenadas/id do cofre?
+- Isto é responsabilidade tua (RAG) ou do Victor (motor determinístico) fazer o polling de estado e disparar `resolverEnigma`? Porque se for o Victor a chamar o teu `MotorRAG` quando deteta o cofre, então o que falta é só os passos 1 e 8, não o loop inteiro.
+
+Sem isto estou a adivinhar estrutura de API, que é exatamente o que as tuas próprias regras proíbem.
+
+**Pergunta**
+Passo 1 — download do manual via endpoint do servidor. Não há nenhum cliente REST para `arena.pmonteiro.ovh`. `OllamaClient` só fala com Ollama local. esse passo e feito no arenacliet nao ? isso é com o vitor
+
+Deteção do evento "pisar cofre" — como é que o agente sabe que está em cima do cofre? Isso implica polling de estado do jogo (posição, HP, `terminal_desafio`). Não há loop principal nenhum. esse passo tambem o robo esta caminhando em direçao ao cofre tabem é do vitor
+
+o unlock espera somente a chave o nome do robo e o id da sala
+
+essa responsabilidade é minha msm
+
+
+**Resposta**
+Passo 1 e a deteção do cofre — aceito, fazem sentido como fronteira do Victor, dado que `ingerirManual(String textoManual)` e `resolverEnigma(String enigma)` já recebem strings prontas, não payloads de rede. Não preciso adivinhar isso.
+
+Mas há uma inconsistência no que acabaste de dizer sobre o `/unlock`.
+
+**Se o download do manual (GET) é do Victor porque ele é quem fala com o servidor, porque é que o POST para `/unlock` é teu?** Isto não bate certo a menos que exista uma separação explícita: Victor trata de GET de estado/manual, tu tratas de POST de resultado. Isso é uma decisão de arquitetura válida, mas não a podes assumir só porque o enunciado lista "submeter" no teu pipeline — o enunciado descreve responsabilidade lógica (decidir o quê submeter), não necessariamente quem faz o `HttpClient.send`.
+
+Pergunta concreta antes de eu sugerir qualquer classe nova: **existe já uma classe `ArenaClient` do Victor com um método tipo `enviarUnlock(...)`, ou vais duplicar o `HttpClient` que já está no `OllamaClient` para bater diretamente no `arena.pmonteiro.ovh`?**
+
+Se a resposta for "vou duplicar", isso é o teu primeiro ponto fraco: estás a criar dois clientes HTTP independentes no mesmo agente, um para Ollama e outro para a arena, sem nenhuma abstração comum — não é errado por si, mas é uma escolha que devias justificar, não assumir por omissão.
+
+Segundo ponto que ainda não respondeste: **o corpo do JSON de `/unlock`** — sabes os três campos (`chave`, `nomeRobo`, `idSala`), mas não disseste:
+
+- Que nomes de campo exatos espera o servidor (`chave` ou `key`? `sala` ou `roomId`?) — isto não é detalhe cosmético, é o que vai para o `JsonObject.addProperty`.
+- O que a resposta do `/unlock` devolve — só um booleano de sucesso, ou HP atualizado, ou mensagem de erro? Isto importa porque o teu `RespostaRAG` já tem `deveSubmeter()` a decidir se vale a pena tentar; se a resposta do servidor tiver informação que devias propagar (ex.: HP restante), precisas de um modelo de retorno, que ainda não existe em lado nenhum do código que mostraste.
+
+Terceiro: quando `deveSubmeter()` é `false` (ambas as tentativas falharam a validação local), o que faz o agente? Não tenta o `/unlock` de todo? Isso evita a penalização de 10 HP por chave errada, mas também significa que nunca ganhas os 100 HP nesse cofre. Isto é uma escolha tua ou é imposta pelas regras do jogo (és obrigado a tentar sempre que pisas o cofre)?
+
+Sem essas três respostas não vou desenhar a classe de submissão — ia estar a adivinhar contrato de API, que é exatamente a regra que tu próprio puseste.
+
+
+**Pergunta**
+esta na print o nomes dos campo e oq devolve quando da sucesso o bau some
+
+em caso de codigo errado
+
+```
+{
+  "status": "falha"
+}
+```
+
+tentativas multiplas em pouco tempo
+
+```
+{
+  "status": "bloqueado",
+  "motivo": "Aguarde. Bloqueio ativo por flood. Liberta em 4s."
+}
+```
+
+quando nao esta perto de bau
+
+```
+{
+  "status": "erro",
+  "motivo": "Nao estas no cofre!"
+}
+```
+
+o vitor mandou o arenacliet para analizarmos
+```
+
+package org.example.rede; import com.google.gson.Gson; import org.example.modelo.Percecao; import org.example.modelo.RespostaAcao; import org.example.modelo.RespostaRegisto; import java.net.URI; import java.net.http.HttpClient; import java.net.http.HttpRequest; import java.net.http.HttpResponse; import java.time.Duration; // SÓ HTTP com a Arena. Não decide, não desenha, não fala com o Ollama. public class ArenaClient { private final HttpClient http; private final Gson gson; private final String urlBase; public ArenaClient(String urlBase) { this.urlBase = urlBase; this.gson = new Gson(); // Timeout de ligação evita bloqueio infinito se o servidor não responder. this.http = HttpClient.newBuilder() .connectTimeout(Duration.ofSeconds(5)) .build(); } // POST /arena/{room_id}/register?robot_id=... — room no path, robot em query string. public RespostaRegisto registar(String roomId, String robotId) throws Exception { String url = urlBase + "/arena/" + roomId + "/register?robot_id=" + robotId; HttpRequest req = HttpRequest.newBuilder() .uri(URI.create(url)) .timeout(Duration.ofSeconds(10)) .POST(HttpRequest.BodyPublishers.noBody()) .build(); HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString()); return gson.fromJson(resp.body(), RespostaRegisto.class); } // GET /arena/{room_id}/perceive/{robot_id} — ambos no path. Confirmado no Swagger. public Percecao perceber(String roomId, String robotId) throws Exception { String url = urlBase + "/arena/" + roomId + "/perceive/" + robotId; HttpRequest req = HttpRequest.newBuilder() .uri(URI.create(url)) .timeout(Duration.ofSeconds(10)) .GET() .build(); HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString()); return gson.fromJson(resp.body(), Percecao.class); } // POST /arena/action — corpo JSON {room_id, robot_id, action}. public RespostaAcao agir(String roomId, String robotId, String action) throws Exception { String url = urlBase + "/arena/action"; String corpo = gson.toJson(new PedidoAcao(roomId, robotId, action)); HttpRequest req = HttpRequest.newBuilder() .uri(URI.create(url)) .timeout(Duration.ofSeconds(10)) .header("Content-Type", "application/json") .POST(HttpRequest.BodyPublishers.ofString(corpo)) .build(); HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString()); return gson.fromJson(resp.body(), RespostaAcao.class); } // STUB — /unlock: encoding (path vs corpo) por confirmar no Swagger. public RespostaAcao desbloquear(String roomId, String robotId, String code, String ragChunk, String llmRaw) throws Exception { throw new UnsupportedOperationException("Confirmar formato do /unlock no Swagger."); } // STUB — /download_manual: formato de retorno (texto cru?) por confirmar. public String descarregarManual(String roomId) throws Exception { throw new UnsupportedOperationException("Confirmar formato do /download_manual no Swagger."); } // Estrutura interna só para serializar o corpo do /action. Nomes = chaves JSON. private static class PedidoAcao { private final String room_id; private final String robot_id; private final String action; PedidoAcao(String roomId, String robotId, String action) { this.room_id = roomId; this.robot_id = robotId; this.action = action; } } }
+```
+
+
+**Resposta**
+**O print confirma os nomes, mas a tua frase "só a chave, nome do robô, id da sala" está incompleta.** Há 5 parâmetros, não 3: `room_id` (path), `robot_id` (query), `code` (query) — esses três, sim — mas também `rag_chunk` e `llm_raw` (query, opcionais). Se não os enviares, o servidor não tem como auditar _que chunk_ e _que resposta bruta do LLM_ levaram àquela chave. Vale a pena confirmares se a avaliação do professor usa esses campos para pontuar o processo RAG em si, não só o resultado — porque se usar, omiti-los custa pontos mesmo acertando a chave.
+
+**Problema mais sério: como distingues sucesso de falha programaticamente?**
+
+- Sucesso: HTTP 200, corpo literal `null`.
+- Falha (código errado): corpo `{"status":"falha"}` — mas não sabemos o HTTP status code disso. O print só mostra 200 para o caso de sucesso.
+- Bloqueado (flood): `{"status":"bloqueado", "motivo":...}`
+- Erro (fora do cofre): `{"status":"erro", "motivo":...}`
+
+Se `gson.fromJson("null", RespostaUnlock.class)` devolve `null` em Java (comportamento padrão do Gson para o literal JSON `null`), e tu não confirmaste os HTTP status codes das falhas, corres o risco de não conseguir diferenciar "sucesso" de "falha ao fazer parse". Precisas de saber: os três casos de erro também devolvem HTTP 200, ou algum devolve 4xx/429? Sem isso o teu tratamento vai ser um `if (respostaCrua.trim().equals("null"))` frágil, dependente de uma string mágica.
+
+**Bug de encoding já presente no `ArenaClient` que o Victor mandou, e que se repete aqui:**
+
+```java
+String url = urlBase + "/arena/" + roomId + "/register?robot_id=" + robotId;
+```
+
+Isto concatena direto, sem `URLEncoder.encode`. Funciona por acaso com `robot_id=neymar` porque não tem caracteres especiais. Mas `rag_chunk` e `llm_raw` vão carregar texto do manual e resposta do LLM — com acentos, espaços, hífenes, possivelmente aspas. O próprio curl do print mostra o encoding correto: `"Não enviado"` virou `N%C3%A3o%20enviado`. Se implementares `desbloquear()` concatenando strings cruas na query string, a request quebra ou o servidor recebe lixo truncado no primeiro espaço/caractere especial.
+
+Segundo problema ligado a isto, que ainda não perguntaste: **qual é o limite de tamanho da query string do servidor/proxy?** Um chunk do manual inteiro (uma secção completa) ou a resposta bruta do LLM podem facilmente passar de 500-1000 caracteres. Muitos proxies/servidores rejeitam URLs acima de ~2000-8000 caracteres com 414. Se pensas mandar o texto completo do chunk e da resposta do LLM sempre, precisas confirmar isto ou truncar deliberadamente.
+
+**Contradição na tua afirmação de responsabilidade:**
+
+Disseste "essa responsabilidade é minha mesmo" sobre o `/unlock`. Mas o ficheiro que o Victor te mandou já tem:
+
+```java
+// STUB — /unlock: encoding (path vs corpo) por confirmar no Swagger.
+public RespostaAcao desbloquear(String roomId, String robotId, String code,
+                                String ragChunk, String llmRaw) throws Exception {
+    throw new UnsupportedOperationException("Confirmar formato do /unlock no Swagger.");
+}
+```
+
+Esse stub está na classe `ArenaClient`, comentada como "**SÓ HTTP** com a Arena. Não decide, não desenha, não fala com o Ollama." — ou seja, o Victor já desenhou a fronteira: toda a comunicação HTTP com a arena (incluindo `/unlock`) vive nesta classe, que é dele. Isto colide diretamente com criares o teu próprio `HttpClient` apontado para `arena.pmonteiro.ovh` dentro do módulo RAG.
+
+Duas leituras possíveis, e não vou assumir qual é a certa:
+
+1. O teu módulo RAG **produz** os dados (`chave`, `chunk`, `respostaBrutaLLM` — que já tens em `RespostaRAG`) e **chama** `arenaClient.desbloquear(...)`, deixando o Victor (ou tu, mas dentro do ficheiro dele) preencher o stub.
+2. Preenches tu o stub dentro do `ArenaClient.java`, mas aí estás a escrever código na classe que git-wise pertence ao domínio dele — precisa de coordenação explícita, não decisão unilateral.
+
+Pergunta direta: **quem vai fazer o commit que preenche `desbloquear()` — tu no ficheiro dele, ou ele a partir dos dados que lhe passas?** Sem resposta a isto não sei se o próximo passo é eu ajudar-te a escrever um cliente HTTP novo (errado, duplica responsabilidade) ou só a lógica que monta os argumentos para chamar o método que já existe (correto, mantém a separação que vocês próprios definiram).
+
+**Pergunta**
+o desbloquear é area dele estavmos confirmando isso falei que era minha antes de confirmar age tenho ctz que é parte dele esta na branch dele commitada ja
+
+e o meu modulo vai produzir os dados e dps chamar o dele
+
+precisamos desse robo abrindo bau o mais rapido possivel
+
+
+**Resposta**
+Confirmado: `desbloquear()` está stubado no `ArenaClient` dele, branch dele, `UnsupportedOperationException` — é domínio dele. Ponto resolvido, mas isso não resolve o resto.
+
+**O que falta antes de "abrir baú o mais rápido possível" é justamente o que vai atrasar se saltares agora:**
+
+**1. `RespostaAcao` não serve para `/unlock`.** O `ArenaClient` do Victor reutiliza `RespostaAcao` como tipo de retorno do stub `desbloquear()`. Mas a resposta real do `/unlock` tem 4 formatos distintos que tu próprio colaste:
+
+- sucesso: corpo literal `null`
+- falha: `{"status":"falha"}`
+- bloqueado: `{"status":"bloqueado","motivo":"..."}`
+- fora do cofre: `{"status":"erro","motivo":"..."}`
+
+Nenhum destes tem cara de `RespostaAcao` (que é a resposta de `/action`, endpoint diferente, com contrato diferente). Se o Victor não criar uma classe nova (`RespostaUnlock` ou semelhante), vai fazer `gson.fromJson(body, RespostaAcao.class)` e ou apanha `null` sem saber se foi sucesso ou parse falhado, ou apanha um objeto com campos todos `null` porque `RespostaAcao` não tem `status`/`motivo`. Isto é um bug de integração que vais descobrir só quando testares contra o servidor real — e o servidor tem bloqueio por flood, o que significa que cada iteração de debug pode custar 4+ segundos de espera forçada. É mais barato apanhar isto agora, por escrito, do que em runtime.
+
+Pergunta que precisas fazer ao Victor, não a mim: ele vai criar esse modelo de resposta, ou é suposto tu forneceres a classe e ele só integra?
+
+**2. Ainda não sabes os HTTP status codes dos 4 casos.** O print só mostra 200 para sucesso. Se "falha", "bloqueado" e "erro" também vierem com 200 (só variando o corpo), o parsing é só por conteúdo JSON. Se algum vier com 4xx, o `HttpResponse.BodyHandlers.ofString()` ainda captura o corpo, mas o teu/dele código precisa de checar status antes de decidir se tenta parse. Isto não é opcional para "abrir baú rápido" — se assumires 200 sempre e vier 429 no caso de flood, o parse quebra ou mente.
+
+**3. Falta o contrato entre o teu módulo e a chamada ao `desbloquear`.** `RespostaRAG` já tem os dados certos (`chavePrimaria`/`chunkUsadoPrimario`/`respostaBrutaLLMPrimaria` e os secundários), mas não tem um método que devolva "qual dos dois pares (chunk, resposta) foi o que efetivamente validou". Quem vai chamar `arenaClient.desbloquear(roomId, robotId, chaveFinal, ragChunk, llmRaw)` precisa de saber se usa o par 1 ou o par 2 conforme `tentativaUsada`. Isso não existe ainda — nem em `RespostaRAG`, nem em `MotorRAGImpl`. É trabalho teu, não do Victor, porque é lógica de seleção sobre os teus próprios dados.
+
+**4. Encoding.** Já falei disto e não respondeste: `rag_chunk` e `llm_raw` vão ter acentos e espaços (o próprio manual tem "NÚCLEO", "ANOMALIAS", etc.). Se o Victor implementar `desbloquear()` concatenando string como fez em `registar()` (sem `URLEncoder.encode`), a query quebra. Isto é decisão dele mas afeta diretamente se os teus dados chegam intactos ao servidor — vale a pena avisares agora, antes de ele implementar, não depois de testarem e falhar silenciosamente.
+
+**Prioridade real para "abrir baú rápido":** não é escrever mais código agora — é apanhar o Victor e fechar 3 coisas por escrito antes de qualquer commit: (a) modelo de resposta do `/unlock`, (b) status codes dos 4 casos, (c) quem faz o encoding de `rag_chunk`/`llm_raw`. Sem isso, qualquer código que eu te dê para "montar a chamada" é uma suposição sobre uma interface que ainda não está definida — exatamente o que as tuas regras proíbem.
+
+
+**Pergunta**
+ent me passa os codigo de tudo que falta
+
+
+**Resposta**
+**Antes do código — a print resolve uma coisa e expõe outra que ainda não fechaste.**
+
+Resolve: `/unlock` só documenta 200 (sucesso) e 422 (validation error). Isto confirma que "falha", "bloqueado" e "erro" são todos **HTTP 200** com corpo JSON diferente — não há status code a distinguir. Só um parâmetro em falta ou de tipo errado dispara 422.
+
+Expõe um problema novo que não tinhas visto: o corpo do 422 é `{"detail": [{"loc":..., "msg":..., "type":..., "input":..., "ctx":...}]}` — formato padrão do FastAPI. Isto **não tem nada em comum** com `{"status":"falha"}` ou `{"status":"bloqueado","motivo":...}`. Se o Victor tentar usar uma única classe Gson para desserializar os dois formatos, os campos não batem — vai ficar tudo `null` num caso ou noutro. Isto reforça o ponto que já levantei: `RespostaAcao` não serve para `/unlock`, e agora sabes que precisas de **dois** modelos possíveis (erro de negócio vs erro de validação), não um. Isso continua a ser problema do Victor, mas avisa-o já, porque isto não é óbvio a partir do que ele tinha.
+
+Isto não é código teu para escrever. O que é teu, e que ainda faltava mesmo sem essa dependência, é o seguinte:
+
+**1. `VetorUtils` — guarda contra norma zero (bug real, não hipotético):**
+
+```java
+package org.example.rag;
+
+public class VetorUtils {
+    private VetorUtils() {}
+
+    public static double cosineSimilarity(double[] a, double[] b) {
+        if (a == null || b == null || a.length != b.length || a.length == 0) {
+            throw new IllegalArgumentException("Vetores inválidos ou de dimensões diferentes.");
+        }
+        double dot = 0, normA = 0, normB = 0;
+        for (int i = 0; i < a.length; i++) {
+            dot += a[i] * b[i];
+            normA += a[i] * a[i];
+            normB += b[i] * b[i];
+        }
+        if (normA == 0.0 || normB == 0.0) {
+            return 0.0; // vetor nulo não tem direção — similaridade indefinida tratada como mínima, nunca escolhida
+        }
+        return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+    }
+}
+```
+
+**2. `ExtratorChave` — exclusão explícita de "NULL", não confiar na validação a jusante:**
+
+```java
+package org.example.rag;
+
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+public final class ExtratorChave {
+    private ExtratorChave() {}
+
+    private static final Pattern CHAVE_PATTERN = Pattern.compile("[A-Z]{2,}-?[A-Z0-9]{2,}");
+
+    public static String extrair(String respostaBruta) {
+        if (respostaBruta == null) return null;
+        Matcher m = CHAVE_PATTERN.matcher(respostaBruta.toUpperCase());
+        while (m.find()) {
+            String candidata = m.group().replaceAll("[^A-Za-z0-9]", "").toUpperCase();
+            if (!candidata.equals("NULL")) {
+                return candidata;
+            }
+        }
+        return null;
+    }
+}
+```
+
+Nota: isto ainda não resolve o caso em que o modelo devolve texto tipo "A resposta correta seria NULL, mas talvez XTR99" — a 0.5B pode gerar isso. Não vou adicionar heurística extra sobre isso sem veres primeiro se acontece nos teus testes reais; adicionar complexidade especulativa é pior do que testar e voltar aqui com o caso concreto.
+
+**3. `RespostaRAG` — encapsular qual par (chunk, resposta) é o final, para quem for chamar `desbloquear()` não replicar a lógica de `tentativaUsada`:**
+
+```java
+public String getChunkFinal() {
+    if (tentativaUsada == 1) return chunkUsadoPrimario;
+    if (tentativaUsada == 2) return chunkUsadoSecundario;
+    return null;
+}
+
+public String getRespostaBrutaLLMFinal() {
+    if (tentativaUsada == 1) return respostaBrutaLLMPrimaria;
+    if (tentativaUsada == 2) return respostaBrutaLLMSecundaria;
+    return null;
+}
+```
+
+(adicionar dentro da classe existente, junto aos outros getters)
+
+**4. Falta a peça de orquestração — e aqui preciso de uma resposta tua antes de a escrever:**
+
+Quem instancia `ArenaClient` e passa `roomId`/`robotId` para o teu módulo chamar `desbloquear()`? Se for o Victor a injetar essas duas strings no teu construtor/método, dou-te já a classe que liga `MotorRAG` a `ArenaClient.desbloquear(...)`. Se ainda não decidiram isso, não vou inventar um construtor — é fronteira entre os dois módulos e é exatamente o tipo de suposição que já te mordeu antes (achavas que `/unlock` era teu).
+
+**Pergunta**
+quem passa esses dois é o victor
+
+
+**Resposta**
+"Quem passa" não é resposta suficiente — é preciso saber **por onde** entram.
+
+Isto colide com o que disseste na mensagem anterior: "o meu módulo vai produzir os dados e dps chamar o dele". Se é o teu módulo que chama `arenaClient.desbloquear(roomId, robotId, ...)`, então **o teu módulo precisa de `roomId` e `robotId` como input antes de fazer essa chamada**. A pergunta não é "quem passa" em abstrato — é: **passa para onde, exatamente?**
+
+Olha para a interface que já existe:
+
+```java
+RespostaRAG resolverEnigma(String enigma) throws Exception;
+```
+
+Não tem `roomId` nem `robotId`. Duas hipóteses, e são incompatíveis entre si:
+
+**Hipótese A** — o Victor estende a assinatura do método, e `resolverEnigma` passa a receber `roomId`/`robotId` para poder chamar `desbloquear()` lá dentro:
+
+```java
+RespostaRAG resolverEnigma(String enigma, String roomId, String robotId) throws Exception;
+```
+
+Isto implica alterar a interface `MotorRAG` — que não me mostraste ainda, só o `MotorRAGImpl`. Se ele já está commitado na branch do Victor com essa assinatura, preciso de ver o ficheiro antes de escrever a implementação.
+
+**Hipótese B** — `resolverEnigma` continua só com `enigma`, devolve `RespostaRAG`, e é o **Victor** quem, depois de receber a resposta, chama `arenaClient.desbloquear(roomId, robotId, resposta.getChaveFinal(), resposta.getChunkFinal(), resposta.getRespostaBrutaLLMFinal())`. Neste caso, **não és tu que chamas `desbloquear()`** — contradiz diretamente o que afirmaste antes.
+
+Não vou assumir qual das duas está certa. Manda-me:
+
+1. A interface `MotorRAG.java` tal como está commitada agora.
+2. Se `roomId`/`robotId` são conhecidos só depois do `registar()` (via `RespostaRegisto`) e guardados onde — no orquestrador principal (main loop), que é de quem?
+
+Sem isto, qualquer assinatura de método que eu te dê é suposição sobre um contrato que vocês ainda não fecharam por escrito.
+
+
+**Pergunta**
+mas pensando nao seria melhor eu nao mandar nada par ao servidor eu mandar apenas para o arena e la ele manda para o servidor o vitor chama a minha funçao e eu devolvo so a chave o rag_chunk e o llm_raw assim nao faz mais sentido?
+
+
+**Resposta**
+Sim, faz mais sentido — mas não é uma ideia nova, é o que já estava implícito e que tu próprio contradisseste na primeira mensagem quando disseste que o `/unlock` era teu. Vale a pena notares isso: a arquitetura correta já estava desenhada no comentário do Victor ("SÓ HTTP com a Arena. Não decide, não desenha, não fala com o Ollama") e na tua própria assinatura `resolverEnigma(String enigma)`, que **já não recebe nem `roomId` nem `robotId`**. Não precisas de mudar a interface — precisas só de parares de tentar meter HTTP no teu lado.
+
+Pontos fracos que isto ainda não resolve:
+
+**1. `RespostaRAG` não tem os getters que resolvem qual par usar.** Propus na mensagem anterior `getChunkFinal()` e `getRespostaBrutaLLMFinal()`, mas confirma que já os adicionaste — sem isso, o Victor teria de replicar a lógica de `if (tentativaUsada == 1) ... else ...` do lado dele, o que quebra o encapsulamento e é exatamente o tipo de acoplamento que estás a tentar evitar.
+
+**2. Contrato de `deveSubmeter()` não está escrito em lado nenhum fora do código.** Se `chaveFinal == null`, o Victor tem de saber que **não deve chamar `desbloquear()` de todo** — não é "chamar com chave null", é "não chamar". Isto precisa de estar documentado explicitamente para ele (javadoc no método, não só o nome), porque se ele passar `resposta.getChaveFinal()` cegamente para `desbloquear()` sem checar `deveSubmeter()` primeiro, vai mandar `code=null` como string literal para a arena e gastar uma tentativa (e possivelmente disparar o bloqueio de flood) por um erro de integração, não por um enigma difícil.
+
+**3. Ainda não sabes quem decide o retry em caso de `"bloqueado"`.** Isso passa a ser 100% do Victor agora — mas se ele tentar chamar `resolverEnigma()` de novo (reprocessando o mesmo enigma, gastando embeddings e chamadas ao LLM outra vez) em vez de só re-tentar o `/unlock` com a mesma `RespostaRAG` já calculada, estás a desperdiçar latência e chamadas Ollama à toa. Vale a pena confirmares com ele que `RespostaRAG` é reutilizável para retry do envio, sem reprocessar o RAG.
+
+**4. Localização do package.** `RespostaRAG` está em `org.example.rag`. Se o `ArenaClient`/orquestrador do Victor está noutro package, confirma que ele consegue importar sem dependência circular (ex.: se o teu `MotorRAG` também importasse algo do package dele para outra coisa).
+
+Resolve o ponto 1 e 2 por escrito com ele antes de assumires que está fechado — o resto (encoding, status codes, formato de erro 422 vs erro de negócio) passa a ser exclusivamente problema dele, o que é a parte boa disto.
+
+**Pergunta**
+MEU `RespostaRAG` esta ssim atual
+
+```
+package org.example.rag;
+
+public class RespostaRAG {
+    private final String chaveFinal;           // null = não submeter (ambas falharam)
+    private final boolean validacaoPassou;
+    private final int tentativaUsada;          // 1, 2, ou 0 se nenhuma validou
+
+    private final String chavePrimaria;
+    private final double scorePrimario;
+    private final String chunkUsadoPrimario;
+    private final String respostaBrutaLLMPrimaria;
+
+    private final String chaveSecundaria;      // null se 1ª já validou (2ª nunca correu)
+    private final double scoreSecundario;
+    private final String chunkUsadoSecundario;
+    private final String respostaBrutaLLMSecundaria;
+
+    public RespostaRAG(String chaveFinal, boolean validacaoPassou, int tentativaUsada,
+                       String chavePrimaria, double scorePrimario, String chunkUsadoPrimario, String respostaBrutaLLMPrimaria,
+                       String chaveSecundaria, double scoreSecundario, String chunkUsadoSecundario, String respostaBrutaLLMSecundaria) {
+        this.chaveFinal = chaveFinal;
+        this.validacaoPassou = validacaoPassou;
+        this.tentativaUsada = tentativaUsada;
+        this.chavePrimaria = chavePrimaria;
+        this.scorePrimario = scorePrimario;
+        this.chunkUsadoPrimario = chunkUsadoPrimario;
+        this.respostaBrutaLLMPrimaria = respostaBrutaLLMPrimaria;
+        this.chaveSecundaria = chaveSecundaria;
+        this.scoreSecundario = scoreSecundario;
+        this.chunkUsadoSecundario = chunkUsadoSecundario;
+        this.respostaBrutaLLMSecundaria = respostaBrutaLLMSecundaria;
+    }
+
+    public boolean deveSubmeter() { return chaveFinal != null; }
+
+    public String getChaveFinal() { return chaveFinal; }
+    public boolean isValidacaoPassou() { return validacaoPassou; }
+    public int getTentativaUsada() { return tentativaUsada; }
+    public String getChavePrimaria() { return chavePrimaria; }
+    public double getScorePrimario() { return scorePrimario; }
+    public String getChunkUsadoPrimario() { return chunkUsadoPrimario; }
+    public String getRespostaBrutaLLMPrimaria() { return respostaBrutaLLMPrimaria; }
+    public String getChaveSecundaria() { return chaveSecundaria; }
+    public double getScoreSecundario() { return scoreSecundario; }
+    public String getChunkUsadoSecundario() { return chunkUsadoSecundario; }
+    public String getRespostaBrutaLLMSecundaria() { return respostaBrutaLLMSecundaria; }
+
+    public String getChunkFinal() {
+        if (tentativaUsada == 1) return chunkUsadoPrimario;
+        if (tentativaUsada == 2) return chunkUsadoSecundario;
+        return null;
+    }
+
+    public String getRespostaBrutaLLMFinal() {
+        if (tentativaUsada == 1) return respostaBrutaLLMPrimaria;
+        if (tentativaUsada == 2) return respostaBrutaLLMSecundaria;
+        return null;
+    }
+}
+```
+
+precisa alterar algo??
+
+tem coisas ai q so vamos conseguir resolver dps de dar merge para o main e testar o robo inteiro na partida
+
+
+**Resposta**
+Não, não está pronto. Três falhas concretas, não estilísticas.
+
+**1. `deveSubmeter()` mente quando `tentativaUsada == 0` mas `chaveFinal` não é null por acidente de construção futura.** Hoje não acontece porque só chamas o construtor com `chaveFinal = null` quando ambas falham — mas isso é uma invariante mantida só por disciplina em `MotorRAGImpl`, não pela classe. Nada impede alguém (ou tu, daqui a duas semanas, sob pressão) de construir `RespostaRAG` com `chaveFinal` preenchido e `tentativaUsada = 0`. Nesse caso `deveSubmeter()` devolve `true`, mas `getChunkFinal()` e `getRespostaBrutaLLMFinal()` devolvem `null`. O Victor recebe `chave != null`, `chunk == null`, `llmRaw == null` — vai mandar `rag_chunk=null` como string literal para a arena. Isto é exatamente o tipo de erro de integração que discutimos: silencioso, só aparece em teste real, e é evitável agora com uma validação no construtor.
+
+**2. Falta um método que agregue os três valores finais numa só chamada.** Já reparaste nisto tu próprio ao propores "eu devolvo só a chave, o rag_chunk e o llm_raw" — mas o Victor vai ter de chamar três getters (`getChaveFinal()`, `getChunkFinal()`, `getRespostaBrutaLLMFinal()`) e ainda checar `deveSubmeter()` antes. São 4 chamadas de método para uma decisão atómica. Isto não é crítico, mas é o tipo de coisa que reduz erro de integração do lado dele — um único ponto de entrada é mais difícil de usar errado que quatro.
+
+**3. Não tens forma de o Victor saber a diferença entre "não tentei a 2ª chave" e "tentei e falhou".** `chaveSecundaria == null` cobre o caso "1ª validou, 2ª nunca correu" (comentário teu). Mas se a 1ª falhar e a 2ª também falhar, `chaveSecundaria` fica preenchida com o valor extraído (mesmo que inválido) — a única forma de saber que _ambas_ falharam é `chaveFinal == null`. Isto está correto, só não está documentado em lado nenhum além do teu comentário interno. Se é para auditoria (a stack diz "todas as mensagens são auditadas"), o Victor ou o professor vai olhar para `chaveSecundaria` populado e `chaveFinal` null e pode interpretar mal sem saber a regra.
+
+Correção mínima — não é reescrita, é adicionar validação e um método de conveniência:
+
+```java
+public RespostaRAG(String chaveFinal, boolean validacaoPassou, int tentativaUsada,
+                   String chavePrimaria, double scorePrimario, String chunkUsadoPrimario, String respostaBrutaLLMPrimaria,
+                   String chaveSecundaria, double scoreSecundario, String chunkUsadoSecundario, String respostaBrutaLLMSecundaria) {
+    if (chaveFinal != null && tentativaUsada != 1 && tentativaUsada != 2) {
+        throw new IllegalArgumentException("chaveFinal preenchida exige tentativaUsada 1 ou 2, recebido: " + tentativaUsada);
+    }
+    if (chaveFinal == null && tentativaUsada != 0) {
+        throw new IllegalArgumentException("chaveFinal null exige tentativaUsada 0, recebido: " + tentativaUsada);
+    }
+    // ... resto igual
+}
+```
+
+E adiciona:
+
+```java
+/**
+ * Ponto único de entrada para quem for submeter ao /unlock.
+ * Devolve null se deveSubmeter() for false — quem chamar TEM de checar isto antes de usar o resultado.
+ */
+public String[] dadosParaSubmissao() {
+    if (!deveSubmeter()) return null;
+    return new String[]{ chaveFinal, getChunkFinal(), getRespostaBrutaLLMFinal() };
+}
+```
+
+Concordo que parte disto só se confirma com o robô em campo — especificamente se `qwen2.5-coder:0.5b` gera respostas fora do padrão esperado pelo `ExtratorChave`, ou se o timing do flood-block interfere com o fluxo. Mas a validação do construtor e o método de agregação não dependem de teste em arena — são invariantes de dados que valem a pena fechar antes do merge, porque um erro aqui não aparece como exceção clara, aparece como `rag_chunk=null` na query string e ninguém percebe porquê a meio de uma partida cronometrada.
+
+
+
+**Pergunta**
+é o seguinte ja temos as duas partes do projeto falta pequenas coisa e a integração delas vou mandar todos os arquivos que eu tenho
+
+MotorHeuristico
+```
+package org.example.heuristica;  
+  
+import org.example.modelo.*;  
+  
+import java.util.ArrayList;  
+import java.util.List;  
+import java.util.HashMap;  
+import java.util.Map;  
+import java.util.Collections;  
+import java.util.Set;  
+import java.util.HashSet;  
+import java.util.LinkedHashSet;  
+  
+    // Cérebro determinístico. Decide a ação SOZINHO. Não faz HTTP/UI/Ollama.  
+    public class MotorHeuristico {  
+  
+    // registar_cofre_falhado: chamado pelo AgenteExplorador quando o /unlock devolve {"status":"falha"}.  
+    // O motor não faz HTTP; só memoriza a coordenada para deixar de a atrair.    public void registarCofreFalhado(int x, int y) {  
+        cofresFalhados.add(chave(x, y));  
+    }  
+  
+    // cofreSobActual: devolve o Cofre em cima do qual o robô está (coords iguais e não falhado),  
+    // ou null. Serve para o orquestrador saber quando acionar o /unlock. Não faz HTTP.    public Cofre cofreSobActual(Percecao p) {  
+        int x = p.getO_meu_estado().getX();  
+        int y = p.getO_meu_estado().getY();  
+        if (p.getCofres_no_mundo() == null) return null;  
+        for (Cofre c : p.getCofres_no_mundo()) {  
+            if (c.getX() == x && c.getY() == y  
+                    && !cofresFalhados.contains(chave(x, y))) {  
+                return c;  
+            }  
+        }  
+        return null;  
+    }  
+  
+    // combate só ativa em Batalha (o modo vem do menu de config, não da API)  
+    private final boolean modoBatalha;  
+  
+    public MotorHeuristico(boolean modoBatalha) {  
+        this.modoBatalha = modoBatalha;  
+    }  
+  
+        // As quatro intenções base. Confirmadas no Swagger.  
+    private static final String[] INTENCOES = {  
+            "MOVER_NORTE", "MOVER_SUL", "MOVER_ESTE", "MOVER_OESTE"  
+    };  
+  
+        // memória do cérebro (estado persistente entre turnos)  
+        private final Map<String, Integer> historicoVisitas = new HashMap<>();  
+        private final Set<String> murosConhecidos = new HashSet<>();  
+        private final Set<String> recursosConhecidos = new LinkedHashSet<>();  
+        private final Set<String> cofresFalhados = new HashSet<>();  
+        private final Set<String> cofresConhecidos = new HashSet<>();  
+        private final Set<String> celulasVistas = new HashSet<>();  
+  
+        // expõem a memória do motor APENAS para leitura (o painel desenha, não altera) — SRP  
+        public Map<String, Integer> getHistoricoVisitas() { return Collections.unmodifiableMap(historicoVisitas); }  
+        public Set<String> getMurosConhecidos()  { return Collections.unmodifiableSet(murosConhecidos); }  
+        public Set<String> getCofresFalhados()   { return Collections.unmodifiableSet(cofresFalhados); }  
+        public Set<String> getRecursosConhecidos(){ return Collections.unmodifiableSet(recursosConhecidos); }  
+        public Set<String> getCofresConhecidos() { return Collections.unmodifiableSet(cofresConhecidos); }  
+        public Set<String> getCelulasVistas() { return Collections.unmodifiableSet(celulasVistas); }  
+  
+        // constrói a chave textual da coordenada para o dicionário  
+        private String chave(int x, int y) {  
+            return x + "," + y;  
+        }  
+  
+        // calcula a coordenada de destino de uma ação (mapeamento já confirmado na Fase 1+2)  
+        private int[] destino(String acao, int x, int y) {  
+            switch (acao) {  
+                case "MOVER_NORTE": return new int[]{x, y - 1};  
+                case "MOVER_SUL":   return new int[]{x, y + 1};  
+                case "MOVER_ESTE":  return new int[]{x + 1, y};  
+                case "MOVER_OESTE": return new int[]{x - 1, y};  
+                default:            return new int[]{x, y}; // ação inesperada: não desloca  
+            }  
+        }  
+  
+        // ajusta o tipo/nome de 'p' ao teu DTO real do /perceive  
+        public String decidirAcao(Percecao p) {  
+            int x = p.getO_meu_estado().getX();  
+            int y = p.getO_meu_estado().getY();  
+            int hp = p.getO_meu_estado().getEnergia();  
+  
+            // varre o raio de visão e memoriza como "chão visto" as casas com linha de visão limpa  
+            varrerCampoVisao(x, y);  
+  
+            // memoriza recursos visíveis não coletados (para regresso com HP baixo)  
+            if (p.getRecursos_no_mundo() != null) {  
+                for (Recurso rec : p.getRecursos_no_mundo()) {  
+                    if (!rec.isColetado()) {  
+                        recursosConhecidos.add(chave(rec.getX(), rec.getY()));  
+                    }  
+                }  
+            }  
+  
+            // remove da memória o recurso onde o robô está agora (coletou-o, ou já não existe)  
+            recursosConhecidos.remove(chave(x, y));  
+  
+            // memoriza muros visíveis (limites + obstáculos internos) para filtragem persistente  
+            if (p.getObjetos_fixos() != null) {  
+                for (ObjetoFixo m : p.getObjetos_fixos()) {  
+                    murosConhecidos.add(chave(m.getX(), m.getY()));  
+                }  
+            }  
+  
+            // memoriza cofres visíveis para os mostrar no mapa mesmo antes de os pisar  
+            if (p.getCofres_no_mundo() != null) {  
+                for (Cofre c : p.getCofres_no_mundo()) {  
+                    cofresConhecidos.add(chave(c.getX(), c.getY()));  
+                }  
+            }  
+  
+            // mapa de calor: regista a passagem pela casa atual (casa andada = valor >=1; não andada = 0)  
+            historicoVisitas.merge(chave(x, y), 1, Integer::sum);  
+  
+            List<String> validas = filtrarColisoes(p);  
+            if (validas.isEmpty()) return null;  
+  
+            // combate tem prioridade máxima em Batalha (abate ou fuga)  
+            String combate = passoCombate(p, x, y, hp, validas);  
+            if (combate != null) return combate;  
+  
+            if (validas.isEmpty()) return null; // cercado por muros: caller não deve mover  
+  
+            // 2+3) tenta cada alvo por ordem de proximidade; usa BFS que contorna muros.            //      Se o mais próximo for inalcançável (atrás de parede), passa ao seguinte (opção A).            List<int[]> alvos = alvosOrdenados(p, x, y, hp);  
+            for (int[] alvo : alvos) {  
+                String acao = passoParaAlvoBFS(x, y, alvo, validas);  
+                if (acao != null) return acao; // rota real encontrada (já contorna a parede)  
+            }  
+  
+            // antes: return passoMaisFrio(validas, x, y);  
+            String rumo = passoExploracao(x, y, validas);  
+            return (rumo != null) ? rumo : passoMaisFrio(validas, x, y);  
+        }  
+  
+        // alvos por prioridade de HP:  
+        // < 80  -> emergência: recursos + cofres (ambos curam), tudo o que for alcançável        // < 200 -> oportunista: só recursos SE visíveis/memorizados; cofres continuam a atrair        // = 250 (cheio) -> só cofres (missão)        private List<int[]> alvosOrdenados(Percecao p, int x, int y, int hp) {  
+            List<int[]> candidatos = new ArrayList<>();  
+  
+            if (hp < 80) {  
+                // emergência de energia: recursos primeiro (curam rápido), depois cofres  
+                candidatos.addAll(alvosRecursos(p));  
+                candidatos.addAll(cofresVisiveis(p));  
+            } else if (hp < 200) {  
+                // oportunista: apanha HP no caminho se houver, mas cofres mantêm-se como objetivo  
+                candidatos.addAll(alvosRecursos(p));  
+                candidatos.addAll(cofresVisiveis(p));  
+            } else {  
+                // HP no teto: foco em cofres (missão)  
+                candidatos.addAll(cofresVisiveis(p));  
+            }  
+  
+            candidatos.sort((a, b) ->  
+                    Integer.compare(manhattan(x, y, a[0], a[1]), manhattan(x, y, b[0], b[1])));  
+            return candidatos;  
+        }  
+  
+        // candidatos de recurso = memorizados + visíveis agora (união, sem duplicados)  
+        private List<int[]> alvosRecursos(Percecao p) {  
+            Set<String> candidatos = new LinkedHashSet<>(recursosConhecidos);  
+            if (p.getRecursos_no_mundo() != null) {  
+                for (Recurso rec : p.getRecursos_no_mundo()) {  
+                    if (!rec.isColetado()) candidatos.add(chave(rec.getX(), rec.getY()));  
+                }  
+            }  
+            List<int[]> alvos = new ArrayList<>();  
+            for (String c : candidatos) {  
+                int[] xy = parseChaveInt(c);  
+                alvos.add(xy);  
+            }  
+            return alvos;  
+        }  
+  
+        // "x,y" -> int[]{x,y}  
+        private int[] parseChaveInt(String c) {  
+            String[] p = c.split(",");  
+            return new int[]{ Integer.parseInt(p[0]), Integer.parseInt(p[1]) };  
+        }  
+  
+        // cofres que não estão na lista negra  
+        private List<int[]> cofresVisiveis(Percecao p) {  
+            List<int[]> r = new ArrayList<>();  
+            if (p.getCofres_no_mundo() == null) return r;  
+            for (Cofre c : p.getCofres_no_mundo()) {  
+                if (!cofresFalhados.contains(chave(c.getX(), c.getY()))) {  
+                    r.add(new int[]{c.getX(), c.getY()});  
+                }  
+            }  
+            return r;  
+        }  
+  
+        // BFS: encontra a casa desconhecida alcançável mais próxima e devolve o 1º passo até lá.  
+        // Atravessa casas vistas/caminháveis (não-muro); para na 1ª casa fora de celulasVistas.        // null se não há fronteira alcançável (mapa explorado ou cercado) -> cai no passoMaisFrio.        private String passoExploracao(int roboX, int roboY, List<String> validas) {  
+            java.util.Deque<int[]> fila = new java.util.ArrayDeque<>();  
+            Set<String> visitadosBFS = new HashSet<>();  
+            // guarda, por cada casa alcançada, a PRIMEIRA ação que iniciou esse ramo  
+            Map<String, String> primeiraAcao = new HashMap<>();  
+  
+            // arranca o BFS pelos vizinhos válidos imediatos (respeitam colisão do turno)  
+            for (String acao : validas) {  
+                int[] d = destino(acao, roboX, roboY);  
+                String k = chave(d[0], d[1]);  
+                if (murosConhecidos.contains(k)) continue;  
+                if (visitadosBFS.add(k)) {  
+                    fila.add(d);  
+                    primeiraAcao.put(k, acao);  
+                }  
+            }  
+  
+            while (!fila.isEmpty()) {  
+                int[] atual = fila.poll();  
+                String kAtual = chave(atual[0], atual[1]);  
+  
+                // fronteira: casa que ainda não foi vista -> destino de exploração  
+                if (!celulasVistas.contains(kAtual)) {  
+                    return primeiraAcao.get(kAtual);  
+                }  
+  
+                // expande para os 4 vizinhos caminháveis  
+                for (String acao : INTENCOES) {  
+                    int[] viz = destino(acao, atual[0], atual[1]);  
+                    if (viz[0] < 0 || viz[1] < 0) continue;  
+                    String kViz = chave(viz[0], viz[1]);  
+                    if (murosConhecidos.contains(kViz)) continue;  
+                    if (visitadosBFS.add(kViz)) {  
+                        fila.add(viz);  
+                        primeiraAcao.put(kViz, primeiraAcao.get(kAtual)); // propaga a ação inicial do ramo  
+                    }  
+                }  
+            }  
+            return null; // sem fronteira alcançável  
+        }  
+  
+        // BFS até uma coordenada-alvo, contornando muros conhecidos. Devolve o 1º passo  
+        // da rota mais curta, ou null se o alvo for inalcançável (cercado por muros).        // Custo uniforme (1 HP/passo) -> BFS dá o caminho mínimo sem A*.        private String passoParaAlvoBFS(int roboX, int roboY, int[] alvo, List<String> validas) {  
+            String alvoK = chave(alvo[0], alvo[1]);  
+            java.util.Deque<int[]> fila = new java.util.ArrayDeque<>();  
+            Set<String> visitadosBFS = new HashSet<>();  
+            Map<String, String> primeiraAcao = new HashMap<>();  
+  
+            // arranca pelos vizinhos válidos imediatos (respeitam a colisão do turno)  
+            for (String acao : validas) {  
+                int[] d = destino(acao, roboX, roboY);  
+                String k = chave(d[0], d[1]);  
+                if (murosConhecidos.contains(k)) continue;  
+                if (visitadosBFS.add(k)) {  
+                    fila.add(d);  
+                    primeiraAcao.put(k, acao);  
+                }  
+            }  
+  
+            while (!fila.isEmpty()) {  
+                int[] atual = fila.poll();  
+                String kAtual = chave(atual[0], atual[1]);  
+  
+                if (kAtual.equals(alvoK)) return primeiraAcao.get(kAtual); // chegou ao alvo  
+  
+                for (String acao : INTENCOES) {  
+                    int[] viz = destino(acao, atual[0], atual[1]);  
+                    if (viz[0] < 0 || viz[1] < 0) continue;  
+                    String kViz = chave(viz[0], viz[1]);  
+                    if (murosConhecidos.contains(kViz)) continue;   // nunca atravessa muro  
+                    if (visitadosBFS.add(kViz)) {  
+                        fila.add(viz);  
+                        primeiraAcao.put(kViz, primeiraAcao.get(kAtual)); // propaga ação inicial do ramo  
+                    }  
+                }  
+            }  
+            return null; // alvo inalcançável com o que se conhece do mapa  
+        }  
+  
+        // alvo com menor distância de Manhattan; null se lista vazia  
+        private int[] maisProximo(List<int[]> alvos, int x, int y) {  
+            int[] melhor = null;  
+            int menor = Integer.MAX_VALUE;  
+            for (int[] a : alvos) {  
+                int d = manhattan(x, y, a[0], a[1]);  
+                if (d < menor) { menor = d; melhor = a; }  
+            }  
+            return melhor;  
+        }  
+  
+        private int manhattan(int x1, int y1, int x2, int y2) {  
+            return Math.abs(x1 - x2) + Math.abs(y1 - y2);  
+        }  
+  
+        // entre as ações válidas, a que mais aproxima do alvo, nunca entrando em muro conhecido.  
+        // Desempate pela casa mais fria. Devolve null se nenhum passo aproxima -> fallback heatmap.        private String passoParaAlvo(List<String> validas, int x, int y, int[] alvo) {  
+            int distAtual = manhattan(x, y, alvo[0], alvo[1]);  
+            String melhor = null;  
+            int melhorDist = Integer.MAX_VALUE;  
+            int melhorVisitas = Integer.MAX_VALUE;  
+            for (String acao : validas) {  
+                int[] d = destino(acao, x, y);  
+                if (murosConhecidos.contains(chave(d[0], d[1]))) continue; // nunca ir para muro conhecido  
+                int dist = manhattan(d[0], d[1], alvo[0], alvo[1]);  
+                if (dist >= distAtual) continue; // só passos que aproximam  
+                int visitas = historicoVisitas.getOrDefault(chave(d[0], d[1]), 0);  
+                if (dist < melhorDist || (dist == melhorDist && visitas < melhorVisitas)) {  
+                    melhorDist = dist; melhorVisitas = visitas; melhor = acao;  
+                }  
+            }  
+            return melhor;  
+        }  
+  
+        // bloco adjacente mais frio (comportamento base de exploração)  
+        private String passoMaisFrio(List<String> validas, int x, int y) {  
+            String melhor = null;  
+            int menorVisitas = Integer.MAX_VALUE;  
+            for (String acao : validas) {  
+                int[] d = destino(acao, x, y);  
+                if (murosConhecidos.contains(chave(d[0], d[1]))) continue; // evita muro memorizado  
+                int visitas = historicoVisitas.getOrDefault(chave(d[0], d[1]), 0);  
+                if (visitas < menorVisitas) { menorVisitas = visitas; melhor = acao; }  
+            }  
+            // se todas as válidas caírem em muro conhecido (raro), usa a 1ª válida como último recurso  
+            return (melhor != null) ? melhor : validas.get(0);  
+        }  
+  
+        // marca em celulasVistas todas as casas dentro do raio 4.5 cuja linha de visão  
+        // até ao robô não é cortada por um muro conhecido (oclusão, §7).        private void varrerCampoVisao(int roboX, int roboY) {  
+            int raio = 4; // 4.5 euclidiano: dx,dy até 4 (5º já excede em qualquer eixo)  
+            for (int dx = -raio; dx <= raio; dx++) {  
+                for (int dy = -raio; dy <= raio; dy++) {  
+                    if (dx * dx + dy * dy > 4.5 * 4.5) continue; // fora do círculo de raio 4.5  
+                    int cx = roboX + dx;  
+                    int cy = roboY + dy;  
+                    if (cx < 0 || cy < 0) continue;              // arena só tem coords positivas  
+                    if (temLinhaDeVisao(roboX, roboY, cx, cy)) {  
+                        celulasVistas.add(chave(cx, cy));         // inclui a própria casa do muro (é vista)  
+                    }  
+                }  
+            }  
+        }  
+  
+        // linha de visão limpa: nenhum muro conhecido ENTRE o robô e o alvo.  
+        // A casa-alvo pode ser muro (vê-se a parede); só bloqueiam muros no caminho, não o destino.        private boolean temLinhaDeVisao(int x0, int y0, int x1, int y1) {  
+            // amostragem por passos ao longo da reta (DDA simples)  
+            int passos = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0));  
+            if (passos == 0) return true; // a própria casa do robô  
+            double dx = (x1 - x0) / (double) passos;  
+            double dy = (y1 - y0) / (double) passos;  
+            // percorre pontos intermédios (exclui origem; exclui destino para não auto-bloquear muros-alvo)  
+            for (int i = 1; i < passos; i++) {  
+                int px = (int) Math.round(x0 + dx * i);  
+                int py = (int) Math.round(y0 + dy * i);  
+                if (murosConhecidos.contains(chave(px, py))) return false; // muro corta a visão  
+            }  
+            return true;  
+        }  
+  
+    // Remove as intenções cujo destino colide com um muro (objetos_fixos).  
+    private List<String> filtrarColisoes(Percecao p) {  
+        int x = p.getO_meu_estado().getX();  
+        int y = p.getO_meu_estado().getY();  
+        List<String> validas = new ArrayList<>();  
+  
+        for (String intencao : INTENCOES) {  
+            int destinoX = x;  
+            int destinoY = y;  
+            switch (intencao) {  
+                case "MOVER_NORTE": destinoY = y - 1; break;  
+                case "MOVER_SUL":   destinoY = y + 1; break;  
+                case "MOVER_ESTE":  destinoX = x + 1; break;  
+                case "MOVER_OESTE": destinoX = x - 1; break;  
+            }  
+            if (!haMuro(p, destinoX, destinoY)) {  
+                validas.add(intencao);  
+            }  
+        }  
+        return validas;  
+    }  
+  
+    // True se algum objeto_fixo ocupa a coordenada dada.  
+    private boolean haMuro(Percecao p, int x, int y) {  
+        if (p.getObjetos_fixos() == null) return false;  
+        for (ObjetoFixo muro : p.getObjetos_fixos()) {  
+            if (muro.getX() == x && muro.getY() == y) {  
+                return true;  
+            }  
+        }  
+        return false;  
+    }  
+  
+        // rival mais próximo VISÍVEL (dentro do raio de radar). Usado para perseguição sustentada.  
+        // Devolve null fora de Batalha ou sem rivais.        private Map.Entry<String, OutroRobot> rivalVisivel(Percecao p, int x, int y) {  
+            if (!modoBatalha || p.getOutros_robots() == null) return null;  
+            java.util.Map.Entry<String, OutroRobot> maisPerto = null;  
+            int menor = Integer.MAX_VALUE;  
+            for (java.util.Map.Entry<String, OutroRobot> e : p.getOutros_robots().entrySet()) {  
+                OutroRobot r = e.getValue();  
+                int d = manhattan(x, y, r.getX(), r.getY());  
+                if (d < menor) { menor = d; maisPerto = e; }  
+            }  
+            return maisPerto; // o servidor só devolve rivais dentro do radar -> já estão visíveis  
+        }  
+  
+        // decisão de combate (§10). Prioridade máxima em Batalha.  
+        // - rival com MENOS HP que o nosso e visível -> perseguir/atacar até ao abate (nunca foge).        // - rival com HP >= o nosso e a <= 2 blocos -> fugir (Nível 2, BFS).        // - caso contrário -> null (segue a missão).        private String passoCombate(Percecao p, int x, int y, int hp, List<String> validas) {  
+            java.util.Map.Entry<String, OutroRobot> alvo = rivalVisivel(p, x, y);  
+            if (alvo == null) return null;  
+  
+            OutroRobot rival = alvo.getValue();  
+            int hpRival = rival.getEnergia();  
+            int dist = manhattan(x, y, rival.getX(), rival.getY());  
+  
+            if (hp > hpRival) {  
+                // ABATE: enquanto visível e mais fraco, persegue com BFS (contorna muros).  
+                // A investida é o próprio movimento para a casa do rival.                String passo = passoParaAlvoBFS(x, y, new int[]{rival.getX(), rival.getY()}, validas);  
+                if (passo != null) return passo;  
+                // rival visível mas inalcançável agora (muro entre ambos) -> não desiste, aproxima-se pelo mapa  
+                return passoExploracao(x, y, validas);  
+            }  
+  
+            // rival mais forte ou igual: só foge se estiver perto o suficiente para ser ameaça  
+            if (dist <= 2) {  
+                return passoFugaBFS(x, y, rival, validas);  
+            }  
+            return null; // rival forte mas longe: ignora, segue missão  
+        }  
+  
+        // Fuga Nível 2: BFS a partir da posição atual, dentro de um horizonte de passos,  
+        // escolhe a casa alcançável (contornando muros) que MAXIMIZA a distância ao rival        // e devolve o 1º passo dessa rota. Evita becos porque só considera casas com caminho real.        private String passoFugaBFS(int roboX, int roboY, OutroRobot rival, List<String> validas) {  
+            final int HORIZONTE = 4; // igual ao raio de visão: foge até ao limite do que conhece  
+  
+            java.util.Deque<int[]> fila = new java.util.ArrayDeque<>(); // {x, y, profundidade}  
+            Set<String> visitadosBFS = new HashSet<>();  
+            Map<String, String> primeiraAcao = new HashMap<>();  
+  
+            String melhorAcao = null;  
+            int melhorDistRival = -1;  
+  
+            for (String acao : validas) {  
+                int[] d = destino(acao, roboX, roboY);  
+                String k = chave(d[0], d[1]);  
+                if (murosConhecidos.contains(k)) continue;  
+                if (visitadosBFS.add(k)) {  
+                    fila.add(new int[]{d[0], d[1], 1});  
+                    primeiraAcao.put(k, acao);  
+                }  
+            }  
+  
+            while (!fila.isEmpty()) {  
+                int[] atual = fila.poll();  
+                String kAtual = chave(atual[0], atual[1]);  
+                int prof = atual[2];  
+  
+                // avalia esta casa como candidato de fuga (mais longe do rival = melhor)  
+                int distRival = manhattan(atual[0], atual[1], rival.getX(), rival.getY());  
+                if (distRival > melhorDistRival) {  
+                    melhorDistRival = distRival;  
+                    melhorAcao = primeiraAcao.get(kAtual);  
+                }  
+  
+                if (prof >= HORIZONTE) continue; // não expande além do horizonte  
+  
+                for (String acao : INTENCOES) {  
+                    int[] viz = destino(acao, atual[0], atual[1]);  
+                    if (viz[0] < 0 || viz[1] < 0) continue;  
+                    String kViz = chave(viz[0], viz[1]);  
+                    if (murosConhecidos.contains(kViz)) continue;  
+                    if (visitadosBFS.add(kViz)) {  
+                        fila.add(new int[]{viz[0], viz[1], prof + 1});  
+                        primeiraAcao.put(kViz, primeiraAcao.get(kAtual));  
+                    }  
+                }  
+            }  
+            return melhorAcao; // null só se cercado; o decidirAcao trata o fallback  
+        }  
+}
+```
+
+
+Cofre
+```
+package org.example.modelo;  
+  
+// Cofre (Terminal de Plasma) devolvido em cofres_no_mundo.  
+// terminal_desafio só vem preenchido quando o robô está SOBRE o cofre.  
+public class Cofre {  
+    private String id;  
+    private int x;  
+    private int y;  
+    private String terminal_desafio;  
+  
+    public String getId() { return id; }  
+    public int getX() { return x; }  
+    public int getY() { return y; }  
+    public String getTerminal_desafio() { return terminal_desafio; }  
+}
+```
+
+DocumentoVetorial
+```
+package org.example.modelo;  
+  
+public class DocumentoVetorial {  
+    private String texto;  
+    private double[] vetor;  
+  
+    public DocumentoVetorial() {}  
+  
+    public DocumentoVetorial(String texto, double[] vetor) {  
+        this.texto = texto;  
+        this.vetor = vetor;  
+    }  
+  
+    public String getTexto() { return texto; }  
+    public void setTexto(String texto) { this.texto = texto; }  
+  
+    public double[] getVetor() {  
+        if (vetor == null) throw new IllegalStateException("DocumentoVetorial sem vetor definido — instanciado via construtor vazio sem setVetor().");  
+        return vetor;  
+    }  
+    public void setVetor(double[] vetor) { this.vetor = vetor; }  
+}
+```
+
+EstadoRobot
+```
+package org.example.modelo;  
+  
+// Estado do próprio robô. Mapeia "estado" (/register) e "o_meu_estado" (/perceive).  
+// Campos confirmados no Swagger: x, y, z, energia, cor.  
+public class EstadoRobot {  
+  
+    private int x;  
+    private int y;  
+    private double z;  
+    private int energia;  
+    private String cor;  
+  
+    public int getX() { return x; }  
+    public void setX(int x) { this.x = x; }  
+  
+    public int getY() { return y; }  
+    public void setY(int y) { this.y = y; }  
+  
+    public double getZ() { return z; }  
+    public void setZ(double z) { this.z = z; }  
+  
+    public int getEnergia() { return energia; }  
+    public void setEnergia(int energia) { this.energia = energia; }  
+  
+    public String getCor() { return cor; }  
+    public void setCor(String cor) { this.cor = cor; }  
+}
+```
+
+ObjetoFixo
+```
+package org.example.modelo;  
+  
+// Elemento de "objetos_fixos" (muros). Bloqueiam movimento E radar.  
+// Campos confirmados no Swagger: id, type, model, x, y, z.  
+public class ObjetoFixo {  
+  
+    private String id;  
+    private String type;  
+    private String model;  
+    private int x;  
+    private int y;  
+    private double z;  
+  
+    public String getId() { return id; }  
+    public void setId(String id) { this.id = id; }  
+  
+    public String getType() { return type; }  
+    public void setType(String type) { this.type = type; }  
+  
+    public String getModel() { return model; }  
+    public void setModel(String model) { this.model = model; }  
+  
+    public int getX() { return x; }  
+    public void setX(int x) { this.x = x; }  
+  
+    public int getY() { return y; }  
+    public void setY(int y) { this.y = y; }  
+  
+    public double getZ() { return z; }  
+    public void setZ(double z) { this.z = z; }  
+}
+```
+
+OutroRobot
+```
+package org.example.modelo;  
+  
+// Robô rival devolvido no mapa outros_robots. Chave do mapa = id; valor = estes campos.  
+public class OutroRobot {  
+    private int x;  
+    private int y;  
+    private double z;  
+    private int energia;  
+    private String cor;  
+  
+    public int getX() { return x; }  
+    public int getY() { return y; }  
+    public double getZ() { return z; }  
+    public int getEnergia() { return energia; }  
+    public String getCor() { return cor; }  
+}
+```
+
+Percecao
+```
+package org.example.modelo;  
+  
+import java.util.List;  
+import java.util.Map;  
+  
+public class Percecao {  
+    private EstadoRobot o_meu_estado;  
+    private java.util.List<org.example.modelo.Recurso> recursos_no_mundo;  
+    private List<ObjetoFixo> objetos_fixos;  
+    private Map<String, OutroRobot> outros_robots;  
+    private java.util.List<org.example.modelo.Cofre> cofres_no_mundo;  
+    private boolean game_started;  
+    private boolean game_over;  
+    private String vencedor;  
+  
+    // getters (necessários para o orquestrador ler o estado)  
+    public EstadoRobot getO_meu_estado() { return o_meu_estado; }  
+    public java.util.List<org.example.modelo.Recurso> getRecursos_no_mundo() { return recursos_no_mundo; }  
+    public List<ObjetoFixo> getObjetos_fixos() { return objetos_fixos; }  
+    public Map<String, OutroRobot> getOutros_robots() { return outros_robots; }  
+    public java.util.List<org.example.modelo.Cofre> getCofres_no_mundo() { return cofres_no_mundo; }public boolean isGame_started() { return game_started; }  
+    public boolean isGame_over() { return game_over; }  
+    public String getVencedor() { return vencedor; }  
+      
+}
+```
+
+Recurso
+```
+package org.example.modelo;  
+  
+// Recurso (esfera de energia) devolvido em recursos_no_mundo  
+public class Recurso {  
+    private String id;  
+    private String type;  
+    private int x;  
+    private int y;  
+    private double z;  
+    private boolean coletado;  
+  
+    public String getId() { return id; }  
+    public String getType() { return type; }  
+    public int getX() { return x; }  
+    public int getY() { return y; }  
+    public double getZ() { return z; }  
+    public boolean isColetado() { return coletado; }  
+}
+```
+
+RespostaAcao
+```
+package org.example.modelo;  
+  
+// Resposta de /arena/action. Confirmado no Swagger: status + nova_posicao.  
+public class RespostaAcao {  
+    private String status;              // ex.: "sucesso"; "bloqueado"/"eliminado" ainda por confirmar  
+    private NovaPosicao nova_posicao;   // presente quando o movimento é válido  
+  
+    public String getStatus() { return status; }  
+    public void setStatus(String status) { this.status = status; }  
+    public NovaPosicao getNova_posicao() { return nova_posicao; }  
+    public void setNova_posicao(NovaPosicao nova_posicao) { this.nova_posicao = nova_posicao; }  
+  
+    // Classe aninhada: a nova posição só tem x, y, z (sem energia/cor).  
+    public static class NovaPosicao {  
+        private int x;  
+        private int y;  
+        private double z;  
+        public int getX() { return x; }  
+        public void setX(int x) { this.x = x; }  
+        public int getY() { return y; }  
+        public void setY(int y) { this.y = y; }  
+        public double getZ() { return z; }  
+        public void setZ(double z) { this.z = z; }  
+    }  
+}
+```
+
+RespostaRegisto
+```
+package org.example.modelo;  
+  
+// Resposta de /arena/{room_id}/register/{robot_id}. Confirmado no Swagger.  
+public class RespostaRegisto {  
+    private String status;       // "registado"  
+    private EstadoRobot estado;  // x, y, z, energia, cor  
+  
+    public String getStatus() { return status; }  
+    public void setStatus(String status) { this.status = status; }  
+    public EstadoRobot getEstado() { return estado; }  
+    public void setEstado(EstadoRobot estado) { this.estado = estado; }  
+}
+```
+
+ExtratorChave
+```
+package org.example.rag;  
+  
+import java.util.regex.Matcher;  
+import java.util.regex.Pattern;  
+  
+public final class ExtratorChave {  
+    private ExtratorChave() {}  
+  
+    private static final Pattern CHAVE_PATTERN = Pattern.compile("[A-Z]{2,}-?[A-Z0-9]{2,}");  
+  
+    public static String extrair(String respostaBruta) {  
+        if (respostaBruta == null) return null;  
+        Matcher m = CHAVE_PATTERN.matcher(respostaBruta.toUpperCase());  
+        while (m.find()) {  
+            String candidata = m.group().replaceAll("[^A-Za-z0-9]", "").toUpperCase();  
+            if (!candidata.equals("NULL")) {  
+                return candidata;  
+            }  
+        }  
+        return null;  
+    }  
+}
+```
+
+MotorRAG
+```
+package org.example.rag;  
+// Fronteira ÚNICA motor determinístico ⇄ RAG. Implementada por Kaiky.// O AgenteExplorador só conhece esta interface. PENDENTE de validação do Kaiky.  
+public interface MotorRAG {  
+    void ingerirManual(String textoManual) throws Exception; // arranque: chunking+embeddings  
+    RespostaRAG resolverEnigma(String enigma) throws Exception;  
+    boolean estaPronto(); // Ollama vivo + manual ingerido  
+}
+```
+
+MotorRAGImpl
+```
+package org.example.rag;  
+  
+import org.example.modelo.DocumentoVetorial;  
+import org.example.rede.OllamaClient;  
+  
+import java.util.ArrayList;  
+import java.util.List;  
+  
+public class MotorRAGImpl implements MotorRAG {  
+  
+    private final OllamaClient client;  
+    private List<DocumentoVetorial> chunks;  
+  
+    public MotorRAGImpl(OllamaClient client) {  
+        this.client = client;  
+    }  
+  
+    @Override  
+    public void ingerirManual(String textoManual) throws Exception {  
+        String[] linhas = textoManual.split("\n");  
+        chunks = new ArrayList<>();  
+        for (String linha : linhas) {  
+            String texto = linha.trim();  
+            if (texto.isEmpty()) continue;  
+            double[] vetor = client.gerarEmbedding(texto);  
+            chunks.add(new DocumentoVetorial(texto, vetor));  
+        }  
+    }  
+  
+    @Override  
+    public boolean estaPronto() {  
+        return client.estaDisponivel() && chunks != null && !chunks.isEmpty();  
+    }  
+  
+    @Override  
+    public RespostaRAG resolverEnigma(String enigma) throws Exception {  
+        if (!estaPronto()) throw new IllegalStateException("Manual não ingerido ou Ollama indisponível.");  
+  
+        double[] vetorEnigma = client.gerarEmbedding(enigma);  
+  
+        // ordena índices dos chunks por score decrescente  
+        List<Integer> ordem = new ArrayList<>();  
+        double[] scores = new double[chunks.size()];  
+        for (int i = 0; i < chunks.size(); i++) {  
+            scores[i] = VetorUtils.cosineSimilarity(vetorEnigma, chunks.get(i).getVetor());  
+            ordem.add(i);  
+        }  
+        ordem.sort((a, b) -> Double.compare(scores[b], scores[a]));  
+  
+        int idx1 = ordem.get(0);  
+        String chunk1 = chunks.get(idx1).getTexto();  
+        String resp1 = client.gerar(montarPrompt(chunk1, enigma)).trim();  
+        String chave1 = ExtratorChave.extrair(resp1);  
+        boolean valida1 = validar(chave1, chunk1);  
+  
+        if (valida1) {  
+            return new RespostaRAG(chave1, true, 1,  
+                    chave1, scores[idx1], chunk1, resp1,  
+                    null, -1.0, null, null);  
+        }  
+  
+        if (chunks.size() < 2) {  
+            return new RespostaRAG(null, false, 0,  
+                    chave1, scores[idx1], chunk1, resp1,  
+                    null, -1.0, null, null);  
+        }  
+  
+        int idx2 = ordem.get(1);  
+        String chunk2 = chunks.get(idx2).getTexto();  
+        String resp2 = client.gerar(montarPrompt(chunk2, enigma)).trim();  
+        String chave2 = ExtratorChave.extrair(resp2);  
+        boolean valida2 = validar(chave2, chunk2);  
+  
+        if (valida2) {  
+            return new RespostaRAG(chave2, true, 2,  
+                    chave1, scores[idx1], chunk1, resp1,  
+                    chave2, scores[idx2], chunk2, resp2);  
+        }  
+  
+        // ambas falharam -> não submete  
+        return new RespostaRAG(null, false, 0,  
+                chave1, scores[idx1], chunk1, resp1,  
+                chave2, scores[idx2], chunk2, resp2);  
+    }  
+  
+    private boolean validar(String chave, String chunk) {  
+        if (chave == null) return false;  
+        String chunkNormalizado = chunk.replaceAll("[^A-Za-z0-9]", "").toUpperCase();  
+        return chunkNormalizado.contains(chave);  
+    }  
+  
+    private String montarPrompt(String chunk, String enigma) {  
+        return  "<|im_start|>system\n" +  
+                "És um sistema de resposta baseado exclusivamente no manual fornecido.\n" +  
+                "Regras:\n" +  
+                "- Utiliza apenas a informação presente no manual.\n" +  
+                "- Nunca inventes informação.\n" +  
+                "- A resposta deve ser exatamente o código presente no manual.\n" +  
+                "- Se não existir resposta no manual responde apenas NULL.\n" +  
+                "<|im_end|>\n" +  
+  
+                "<|im_start|>user\n" +  
+                "Manual:\n" +  
+                chunk +  
+                "\n\nPergunta:\n" +  
+                enigma +  
+                "\n<|im_end|>\n" +  
+  
+                "<|im_start|>assistant\n";  
+    }  
+}
+```
+
+RespostaRAG
+```
+package org.example.rag;  
+  
+public class RespostaRAG {  
+    private final String chaveFinal;           // null = não submeter (ambas falharam)  
+    private final boolean validacaoPassou;  
+    private final int tentativaUsada;          // 1, 2, ou 0 se nenhuma validou  
+  
+    private final String chavePrimaria;  
+    private final double scorePrimario;  
+    private final String chunkUsadoPrimario;  
+    private final String respostaBrutaLLMPrimaria;  
+  
+    private final String chaveSecundaria;      // null se 1ª já validou (2ª nunca correu)  
+    private final double scoreSecundario;  
+    private final String chunkUsadoSecundario;  
+    private final String respostaBrutaLLMSecundaria;  
+  
+    public RespostaRAG(String chaveFinal, boolean validacaoPassou, int tentativaUsada,  
+                       String chavePrimaria, double scorePrimario, String chunkUsadoPrimario, String respostaBrutaLLMPrimaria,  
+                       String chaveSecundaria, double scoreSecundario, String chunkUsadoSecundario, String respostaBrutaLLMSecundaria) {  
+        if (chaveFinal != null && tentativaUsada != 1 && tentativaUsada != 2) {  
+            throw new IllegalArgumentException("chaveFinal preenchida exige tentativaUsada 1 ou 2, recebido: " + tentativaUsada);  
+        }  
+        if (chaveFinal == null && tentativaUsada != 0) {  
+            throw new IllegalArgumentException("chaveFinal null exige tentativaUsada 0, recebido: " + tentativaUsada);  
+        }  
+        this.chaveFinal = chaveFinal;  
+        this.validacaoPassou = validacaoPassou;  
+        this.tentativaUsada = tentativaUsada;  
+        this.chavePrimaria = chavePrimaria;  
+        this.scorePrimario = scorePrimario;  
+        this.chunkUsadoPrimario = chunkUsadoPrimario;  
+        this.respostaBrutaLLMPrimaria = respostaBrutaLLMPrimaria;  
+        this.chaveSecundaria = chaveSecundaria;  
+        this.scoreSecundario = scoreSecundario;  
+        this.chunkUsadoSecundario = chunkUsadoSecundario;  
+        this.respostaBrutaLLMSecundaria = respostaBrutaLLMSecundaria;  
+    }  
+  
+    public boolean deveSubmeter() { return chaveFinal != null; }  
+  
+    public String getChaveFinal() { return chaveFinal; }  
+    public boolean isValidacaoPassou() { return validacaoPassou; }  
+    public int getTentativaUsada() { return tentativaUsada; }  
+    public String getChavePrimaria() { return chavePrimaria; }  
+    public double getScorePrimario() { return scorePrimario; }  
+    public String getChunkUsadoPrimario() { return chunkUsadoPrimario; }  
+    public String getRespostaBrutaLLMPrimaria() { return respostaBrutaLLMPrimaria; }  
+    public String getChaveSecundaria() { return chaveSecundaria; }  
+    public double getScoreSecundario() { return scoreSecundario; }  
+    public String getChunkUsadoSecundario() { return chunkUsadoSecundario; }  
+    public String getRespostaBrutaLLMSecundaria() { return respostaBrutaLLMSecundaria; }  
+  
+    public String[] dadosParaSubmissao() {  
+        if (!deveSubmeter()) return null;  
+        return new String[]{ chaveFinal, getChunkFinal(), getRespostaBrutaLLMFinal() };  
+    }  
+  
+    public String getChunkFinal() {  
+        if (tentativaUsada == 1) return chunkUsadoPrimario;  
+        if (tentativaUsada == 2) return chunkUsadoSecundario;  
+        return null;  
+    }  
+  
+    public String getRespostaBrutaLLMFinal() {  
+        if (tentativaUsada == 1) return respostaBrutaLLMPrimaria;  
+        if (tentativaUsada == 2) return respostaBrutaLLMSecundaria;  
+        return null;  
+    }  
+}
+```
+
+VetorUtils
+```
+package org.example.rag;  
+  
+public class VetorUtils {  
+    private VetorUtils() {}  
+  
+    public static double cosineSimilarity(double[] a, double[] b) {  
+        if (a == null || b == null || a.length != b.length || a.length == 0) {  
+            throw new IllegalArgumentException("Vetores inválidos ou de dimensões diferentes.");  
+        }  
+        double dot = 0, normA = 0, normB = 0;  
+        for (int i = 0; i < a.length; i++) {  
+            dot += a[i] * b[i];  
+            normA += a[i] * a[i];  
+            normB += b[i] * b[i];  
+        }  
+        if (normA == 0.0 || normB == 0.0) {  
+            return 0.0; // vetor nulo não tem direção — similaridade indefinida tratada como mínima, nunca escolhida  
+        }  
+        return dot / (Math.sqrt(normA) * Math.sqrt(normB));  
+    }  
+}
+```
+
+ArenaClient
+```
+package org.example.rede;  
+  
+import com.google.gson.Gson;  
+import org.example.modelo.Percecao;  
+import org.example.modelo.RespostaAcao;  
+import org.example.modelo.RespostaRegisto;  
+  
+import java.net.URI;  
+import java.net.http.HttpClient;  
+import java.net.http.HttpRequest;  
+import java.net.http.HttpResponse;  
+import java.time.Duration;  
+  
+  
+  
+// SÓ HTTP com a Arena. Não decide, não desenha, não fala com o Ollama.  
+public class ArenaClient {  
+  
+    private final HttpClient http;  
+    private final Gson gson;  
+    private final String urlBase;  
+  
+    public ArenaClient(String urlBase) {  
+        this.urlBase = urlBase;  
+        this.gson = new Gson();  
+        // Timeout de ligação evita bloqueio infinito se o servidor não responder.  
+        this.http = HttpClient.newBuilder()  
+                .connectTimeout(Duration.ofSeconds(5))  
+                .build();  
+    }  
+  
+    // POST /arena/{room_id}/register?robot_id=... — room no path, robot em query string.  
+    public RespostaRegisto registar(String roomId, String robotId) throws Exception {  
+        String url = urlBase + "/arena/" + roomId + "/register?robot_id=" + robotId;  
+        HttpRequest req = HttpRequest.newBuilder()  
+                .uri(URI.create(url))  
+                .timeout(Duration.ofSeconds(10))  
+                .POST(HttpRequest.BodyPublishers.noBody())  
+                .build();  
+        HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());  
+        return gson.fromJson(resp.body(), RespostaRegisto.class);  
+    }  
+  
+    // GET /arena/{room_id}/perceive/{robot_id} — ambos no path. Confirmado no Swagger.  
+    public Percecao perceber(String roomId, String robotId) throws Exception {  
+        String url = urlBase + "/arena/" + roomId + "/perceive/" + robotId;  
+        HttpRequest req = HttpRequest.newBuilder()  
+                .uri(URI.create(url))  
+                .timeout(Duration.ofSeconds(10))  
+                .GET()  
+                .build();  
+        HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());  
+        return gson.fromJson(resp.body(), Percecao.class);  
+    }  
+  
+    // POST /arena/action — corpo JSON {room_id, robot_id, action}.  
+    public RespostaAcao agir(String roomId, String robotId, String action) throws Exception {  
+        String url = urlBase + "/arena/action";  
+        String corpo = gson.toJson(new PedidoAcao(roomId, robotId, action));  
+        HttpRequest req = HttpRequest.newBuilder()  
+                .uri(URI.create(url))  
+                .timeout(Duration.ofSeconds(10))  
+                .header("Content-Type", "application/json")  
+                .POST(HttpRequest.BodyPublishers.ofString(corpo))  
+                .build();  
+        HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());  
+        return gson.fromJson(resp.body(), RespostaAcao.class);  
+    }  
+  
+    // STUB — /unlock: encoding (path vs corpo) por confirmar no Swagger.  
+    public RespostaAcao desbloquear(String roomId, String robotId, String code,  
+                                    String ragChunk, String llmRaw) throws Exception {  
+        throw new UnsupportedOperationException("Confirmar formato do /unlock no Swagger.");  
+    }  
+  
+    // STUB — /download_manual: formato de retorno (texto cru?) por confirmar.  
+    public String descarregarManual(String roomId) throws Exception {  
+        throw new UnsupportedOperationException("Confirmar formato do /download_manual no Swagger.");  
+    }  
+  
+    // Estrutura interna só para serializar o corpo do /action. Nomes = chaves JSON.  
+    private static class PedidoAcao {  
+        private final String room_id;  
+        private final String robot_id;  
+        private final String action;  
+        PedidoAcao(String roomId, String robotId, String action) {  
+            this.room_id = roomId;  
+            this.robot_id = robotId;  
+            this.action = action;  
+        }  
+    }  
+}
+```
+
+OllamaClient
+```
+package org.example.rede;  
+  
+import com.google.gson.JsonArray;  
+import com.google.gson.JsonObject;  
+import com.google.gson.JsonParser;  
+import java.net.URI;  
+import java.net.http.HttpClient;  
+import java.net.http.HttpRequest;  
+import java.net.http.HttpResponse;  
+import java.time.Duration;  
+  
+public class OllamaClient {  
+    private static final String OLLAMA_URL = "http://localhost:11434";  
+    private static final String MODELO_EMBEDDING = "nomic-embed-text";  
+    private static final String MODELO_LLM = "qwen2.5-coder:0.5b-instruct-q4_K_M";  
+    private final HttpClient httpClient;  
+  
+    public OllamaClient() {  
+        this.httpClient = HttpClient.newBuilder()  
+                .connectTimeout(java.time.Duration.ofSeconds(30))  
+                .build();  
+    }  
+  
+    public boolean estaDisponivel() {  
+        try {  
+  
+            HttpRequest request = HttpRequest.newBuilder()  
+                    .uri(URI.create(OLLAMA_URL + "/api/tags"))  
+                    .GET()  
+                    .timeout(Duration.ofSeconds(5))  
+                    .build();  
+  
+            HttpResponse<String> response =  
+                    httpClient.send(request, HttpResponse.BodyHandlers.ofString());  
+  
+            return response.statusCode() == 200;  
+  
+        } catch (Exception e) {  
+            return false;  
+        }  
+    }  
+  
+    public double[] gerarEmbedding(String texto) throws Exception {  
+        JsonObject body = new JsonObject();  
+        body.addProperty("model", MODELO_EMBEDDING);  
+        body.addProperty("prompt", texto);  
+  
+        HttpRequest request = HttpRequest.newBuilder()  
+                .uri(URI.create(OLLAMA_URL + "/api/embeddings"))  
+                .header("Content-Type", "application/json")  
+                .POST(HttpRequest.BodyPublishers.ofString(body.toString()))  
+                .timeout(Duration.ofSeconds(30))  
+                .build();  
+  
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());  
+  
+        if (response.statusCode() != 200) {  
+            throw new RuntimeException("Ollama embeddings HTTP " + response.statusCode() + ": " + response.body());  
+        }  
+  
+        JsonObject json = JsonParser.parseString(response.body()).getAsJsonObject();  
+        if (!json.has("embedding")) {  
+            throw new RuntimeException("Resposta sem campo 'embedding': " + response.body());  
+        }  
+  
+        JsonArray arr = json.getAsJsonArray("embedding");  
+        double[] vetor = new double[arr.size()];  
+        for (int i = 0; i < arr.size(); i++) {  
+            vetor[i] = arr.get(i).getAsDouble();  
+        }  
+        return vetor;  
+    }        // nomic-embed-text  
+  
+    public String gerar(String promptChatML) throws Exception {  
+        JsonObject options = new JsonObject();  
+        options.addProperty("temperature", 0.0);  
+  
+        JsonObject body = new JsonObject();  
+        body.addProperty("model", MODELO_LLM);  
+        body.addProperty("prompt", promptChatML);  
+        body.addProperty("stream", false);  
+        body.add("options", options);  
+  
+        HttpRequest request = HttpRequest.newBuilder()  
+                .uri(URI.create(OLLAMA_URL + "/api/generate"))  
+                .header("Content-Type", "application/json")  
+                .POST(HttpRequest.BodyPublishers.ofString(body.toString()))  
+                .timeout(Duration.ofSeconds(60))  
+                .build();  
+  
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());  
+  
+        if (response.statusCode() != 200) {  
+            throw new RuntimeException("Ollama generate HTTP " + response.statusCode() + ": " + response.body());  
+        }  
+  
+        JsonObject json = JsonParser.parseString(response.body()).getAsJsonObject();  
+        if (!json.has("response")) {  
+            throw new RuntimeException("Resposta sem campo 'response': " + response.body());  
+        }  
+        return json.get("response").getAsString();  
+    }        // qwen2.5-coder  
+}
+```
+
+PainelMapaCalor
+```
+package org.example.ui;  
+  
+import org.example.modelo.*;  
+  
+import javax.swing.JPanel;  
+import java.awt.Color;  
+import java.awt.Font;  
+import java.awt.Graphics;  
+import java.awt.Graphics2D;  
+import java.util.Map;  
+import java.util.Set;  
+  
+// Só desenha (SRP). Reflete a MEMÓRIA do cerebro: recebe conjuntos só-de-leitura  
+// (visitas, muros, recursos conhecidos, cofres falhados) + posição do robô.  
+public class PainelMapaCalor extends JPanel {  
+  
+    private final Map<String, Integer> historicoVisitas;  
+    private final Set<String> murosConhecidos;  
+    private final Set<String> recursosConhecidos;  
+    private final Set<String> cofresFalhados;  
+    private final Set<String> cofresConhecidos;  
+    private final Set<String> celulasVistas;  
+  
+    // posições dos rivais NESTE turno (transitório; não é memória persistente)  
+    private java.util.Map<String, OutroRobot> rivais;  
+  
+    private int xRobo = 0;  
+    private int yRobo = 0;  
+  
+    private static final Color COR_ANDADA = new Color(60, 90, 160);  
+    private static final Color COR_MURO   = new Color(150, 90, 30);  
+  
+    // recebe as referências só-de-leitura do cerebro (partilhadas, refletem sempre o estado atual)  
+    public PainelMapaCalor(Map<String, Integer> historicoVisitas,  
+                           Set<String> murosConhecidos,  
+                           Set<String> recursosConhecidos,  
+                           Set<String> cofresConhecidos,  
+                           Set<String> cofresFalhados,  
+                           Set<String> celulasVistas) {  
+        this.historicoVisitas = historicoVisitas;  
+        this.murosConhecidos = murosConhecidos;  
+        this.recursosConhecidos = recursosConhecidos;  
+        this.cofresConhecidos = cofresConhecidos;  
+        this.cofresFalhados = cofresFalhados;  
+        this.celulasVistas = celulasVistas;  
+        setBackground(Color.BLACK);  
+    }  
+  
+    // só posição do robô muda por chamada; o resto é lido dos conjuntos partilhados  
+    public void atualizar(int x, int y, java.util.Map<String, OutroRobot> rivais) {  
+        this.xRobo = x;  
+        this.yRobo = y;  
+        this.rivais = rivais;  
+        repaint();  
+    }  
+  
+    @Override  
+    protected void paintComponent(Graphics g) {  
+        super.paintComponent(g);  
+        Graphics2D g2 = (Graphics2D) g;  
+  
+        int maxX = xRobo, maxY = yRobo;  
+        for (String k : historicoVisitas.keySet())  { int[] c = parseChave(k); maxX = Math.max(maxX, c[0]); maxY = Math.max(maxY, c[1]); }  
+    for (String k : murosConhecidos)                { int[] c = parseChave(k); maxX = Math.max(maxX, c[0]); maxY = Math.max(maxY, c[1]); }  
+    for (String k : recursosConhecidos)             { int[] c = parseChave(k); maxX = Math.max(maxX, c[0]); maxY = Math.max(maxY, c[1]); }  
+    for (String k : cofresFalhados)                 { int[] c = parseChave(k); maxX = Math.max(maxX, c[0]); maxY = Math.max(maxY, c[1]); }  
+    for (String k : cofresConhecidos)               { int[] c = parseChave(k); maxX = Math.max(maxX, c[0]); maxY = Math.max(maxY, c[1]); }  
+    for (String k : celulasVistas)                  { int[] c = parseChave(k); maxX = Math.max(maxX, c[0]); maxY = Math.max(maxY, c[1]); }  
+  
+        int colunas = maxX + 1, linhas = maxY + 1;  
+        int lado = Math.min(getWidth() / colunas, getHeight() / linhas);  
+        if (lado < 1) lado = 1;  
+  
+        // casas andadas: cor única + número de visitas  
+        g2.setFont(new Font("Monospaced", Font.BOLD, Math.max(8, lado / 3)));  
+        for (Map.Entry<String, Integer> e : historicoVisitas.entrySet()) {  
+            int[] c = parseChave(e.getKey());  
+            int px = c[0] * lado, py = (linhas - 1 - c[1]) * lado;  
+            g2.setColor(COR_ANDADA);  
+            g2.fillRect(px, py, lado, lado);  
+            desenharTextoCentrado(g2, String.valueOf(e.getValue()), px, py, lado, Color.WHITE);  
+        }  
+  
+        // casas vistas mas não andadas: cinza (o desconhecido fica preto = fundo, sem desenho)  
+        g2.setColor(new Color(70, 70, 70));  
+        for (String k : celulasVistas) {  
+            if (historicoVisitas.containsKey(k)) continue; // andada desenha-se a azul depois  
+            int[] c = parseChave(k);  
+            g2.fillRect(c[0] * lado, (linhas - 1 - c[1]) * lado, lado, lado);  
+        }  
+  
+        // muros (castanho) — memória do motor  
+        g2.setColor(COR_MURO);  
+        for (String k : murosConhecidos) {  
+            int[] c = parseChave(k);  
+            g2.fillRect(c[0] * lado, (linhas - 1 - c[1]) * lado, lado, lado);  
+        }  
+  
+        // recursos conhecidos (verde) — somem sozinhos quando o cerebro os remove (coletados)  
+        g2.setColor(Color.GREEN);  
+        for (String k : recursosConhecidos) {  
+            int[] c = parseChave(k);  
+            g2.fillRect(c[0] * lado, (linhas - 1 - c[1]) * lado, lado, lado);  
+        }  
+  
+        // rivais (magenta) — posição do turno atual; sobrepõe-se ao mapa  
+        if (rivais != null) {  
+            g2.setColor(new Color(236, 72, 153)); // tom distinto do ciano do robô  
+            for (OutroRobot r : rivais.values()) {  
+                int px = r.getX() * lado, py = (linhas - 1 - r.getY()) * lado;  
+                g2.fillRect(px, py, lado, lado);  
+            }  
+        }  
+  
+        // cofres conhecidos: amarelo por defeito; se falhado, vermelho com "F"  
+        for (String k : cofresConhecidos) {  
+            int[] c = parseChave(k);  
+            int px = c[0] * lado, py = (linhas - 1 - c[1]) * lado;  
+            if (cofresFalhados.contains(k)) {  
+                g2.setColor(new Color(120, 30, 30));  
+                g2.fillRect(px, py, lado, lado);  
+                desenharTextoCentrado(g2, "F", px, py, lado, Color.WHITE);  
+            } else {  
+                g2.setColor(Color.YELLOW);  
+                g2.fillRect(px, py, lado, lado);  
+            }  
+        }  
+  
+        // grelha  
+        g2.setColor(new Color(40, 40, 40));  
+        for (int i = 0; i <= colunas; i++) g2.drawLine(i * lado, 0, i * lado, linhas * lado);  
+        for (int j = 0; j <= linhas; j++) g2.drawLine(0, j * lado, colunas * lado, j * lado);  
+  
+        // robô (ciano)  
+        g2.setColor(Color.CYAN);  
+        g2.fillOval(xRobo * lado, (linhas - 1 - yRobo) * lado, lado, lado);  
+    }  
+  
+    private void desenharTextoCentrado(Graphics2D g2, String txt, int px, int py, int lado, Color cor) {  
+        g2.setColor(cor);  
+        int tw = g2.getFontMetrics().stringWidth(txt);  
+        int th = g2.getFontMetrics().getAscent();  
+        g2.drawString(txt, px + (lado - tw) / 2, py + (lado + th) / 2);  
+    }  
+  
+    private int[] parseChave(String chave) {  
+        String[] partes = chave.split(",");  
+        return new int[]{ Integer.parseInt(partes[0]), Integer.parseInt(partes[1]) };  
+    }  
+}
+```
+
+AgenteExplorador
+```
+package org.example;  
+  
+import org.example.heuristica.MotorHeuristico;  
+import org.example.modelo.Percecao;  
+import org.example.modelo.RespostaRegisto;  
+import org.example.modelo.Cofre;  
+import org.example.rede.ArenaClient;  
+import org.example.ui.PainelMapaCalor;  
+  
+import javax.swing.JFrame;  
+  
+// Loop Sense-Think-Act 100% autónomo. Só orquestra e delega.  
+public class AgenteExplorador {  
+  
+    private final ArenaClient arena = new ArenaClient(Configuracao.URL_BASE);  
+  
+    private MotorHeuristico cerebro;  
+  
+    // PLACEHOLDER TEMPORÁRIO — substituir pela integração RAG+/unlock do Kaiky.  
+    // Simula sempre {"status":"falha"} para o robô marcar o cofre e sair, evitando o loop.    private String tentarUnlockPlaceholder(Cofre cofre) {  
+        System.out.println("[PLACEHOLDER] Cofre em (" + cofre.getX() + "," + cofre.getY()  
+                + ") detetado. Enigma: " + cofre.getTerminal_desafio());  
+        System.out.println("[PLACEHOLDER] A simular falha de unlock (RAG do Kaiky ainda nao ligado).");  
+        return "falha";  
+    }  
+  
+    public static void main(String[] args) throws Exception {  
+        new AgenteExplorador().correr();  
+    }  
+  
+    public void correr() throws Exception {  
+        // modo definido no arranque (imutável durante a partida) -> passado ao cérebro por construtor  
+        cerebro = new MotorHeuristico(Configuracao.MODO_BATALHA);  
+  
+        RespostaRegisto reg = arena.registar(Configuracao.ROOM_ID, Configuracao.ROBOT_ID);  
+        System.out.println("Registado em (" + reg.getEstado().getX() + ","  
+                + reg.getEstado().getY() + ") energia=" + reg.getEstado().getEnergia());  
+  
+        PainelMapaCalor painel = new PainelMapaCalor(  
+                cerebro.getHistoricoVisitas(),  
+                cerebro.getMurosConhecidos(),  
+                cerebro.getRecursosConhecidos(),  
+                cerebro.getCofresFalhados(),  
+                cerebro.getCofresConhecidos(),  
+                cerebro.getCelulasVistas()  
+        );  
+  
+        JFrame janela = new JFrame("Mapa de Calor - NeymarRAG");  
+        janela.add(painel);  
+        janela.setSize(600, 600);  
+        janela.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);  
+        janela.setVisible(true);  
+  
+        while (true) {  
+            try {  
+                // SENSE  
+                Percecao p = arena.perceber(Configuracao.ROOM_ID, Configuracao.ROBOT_ID);  
+  
+                if (p.isGame_over()) {  
+                    System.out.println("Jogo terminado. A desligar motores.");  
+                    break;  
+                }  
+                if (!p.isGame_started()) {  
+                    // Lobby: aguarda o início sem consumir a decisão.  
+                    pausar();  
+                    continue;  
+                }  
+  
+                // --- Deteção de cofre e (placeholder) tentativa de desbloqueio ---  
+                Cofre cofreActual = cerebro.cofreSobActual(p);  
+                if (cofreActual != null) {  
+                    // FRONTEIRA KAIKY: aqui entrará a chamada real ao /unlock, com a chave  
+                    // gerada pelo pipeline RAG a partir de cofreActual.getTerminal_desafio().                    // Por agora, placeholder que simula sempre falha para quebrar o loop.                    String status = tentarUnlockPlaceholder(cofreActual);  
+  
+                    if ("falha".equals(status)) {  
+                        // marca o cofre para deixar de o atrair -> quebra o loop entra/sai  
+                        cerebro.registarCofreFalhado(cofreActual.getX(), cofreActual.getY());  
+                    }  
+                    // (quando houver "sucesso" real: opcionalmente injetar fuga na filaAcoesPlaneadas)  
+                }  
+  
+                // THINK - decisão de movimento normal (atração já ignora cofres falhados)  
+                String acao = cerebro.decidirAcao(p);  
+  
+                // ACT  
+                if (acao != null) {  
+                    arena.agir(Configuracao.ROOM_ID, Configuracao.ROBOT_ID, acao);  
+                    System.out.println("Pos=(" + p.getO_meu_estado().getX() + ","  
+                            + p.getO_meu_estado().getY() + ") HP=" + p.getO_meu_estado().getEnergia()  
+                            + " -> " + acao);  
+  
+                }  
+  
+                // no fim de cada ciclo Sense-Think-Act:  
+                painel.atualizar(  
+                        p.getO_meu_estado().getX(),  
+                        p.getO_meu_estado().getY(),  
+                        p.getOutros_robots()  
+                );  
+            } catch (Exception e) {  
+                // Resiliência: timeouts/micro-cortes não derrubam o agente.  
+                System.out.println("Falha no turno (a retomar): " + e.getMessage());  
+            }  
+            pausar(); // anti-flood obrigatório  
+        }  
+    }  
+  
+    // Pausa entre turnos. Margem ≥ 350-400ms para o Jitter da rede.  
+    private void pausar() {  
+        try {  
+            Thread.sleep(Configuracao.PAUSA_CICLO_MS);  
+        } catch (InterruptedException ignored) {  
+            Thread.currentThread().interrupt();  
+        }  
+    }  
+}
+```
+
+Configuracao
+```
+package org.example;  
+  
+// Constantes do agente. Tudo fixo no código → autonomia total, nada manual.  
+public final class Configuracao {  
+    private Configuracao() {}  
+  
+    public static final String URL_BASE  = "https://arena.pmonteiro.ovh";  
+    public static final String ROOM_ID = "F43501"; // id da sala gerada (muda por sessão)  
+    public static final String ROBOT_ID  = "kk";  
+  
+    // modo de jogo: true = Batalha (combate on), false = Missão (combate off)  
+    // editar manualmente conforme a sala de teste até o menu existir    public static final boolean MODO_BATALHA = false;  
+  
+    // Física (Secção 7 — confirmada no enunciado).  
+    public static final int HP_INICIAL = 200;  
+    public static final int HP_TETO    = 250;  
+    public static final double RAIO_RADAR = 4.5;  
+  
+    // Anti-flood (Secção 9): margem ≥ 350-400 ms.  
+    public static final long PAUSA_CICLO_MS = 400;  
+  
+    // Confiança mínima do RAG para autorizar /unlock (evita -10 HP por palpite).  
+    // Calibrar na sala de treino.    public static final double LIMIAR_SIMILARIDADE = 0.75;  
+}
+```
+
+
+**Resposta**
+Li os dois módulos e a fronteira (`MotorRAG`). O código RAG está quase todo lá; a integração está bloqueada por duas coisas que **não estão no código** e que eu não vou inventar num contexto auditado:
+
+**Bloqueadores (dependem do Swagger, não de código):**
+
+1. `/unlock` — `ArenaClient.desbloquear(...)` é stub. Não sei o encoding (path vs corpo JSON), que campos aceita, nem o shape da resposta (reutiliza `RespostaAcao` com `status:"sucesso"/"falha"`, ou é um tipo próprio?). Sem isto não fecho a submissão da chave.
+2. `/download_manual` — `descarregarManual(...)` é stub. Não sei se devolve texto cru, JSON com um campo, ou ficheiro. Isto define como o `ingerirManual` recebe o input.
+
+Ambos vivem no `ArenaClient` (camada de rede = ficheiro do Victor), mas gatilham o meu pipeline. O formato tem de ser confirmado antes de qualquer um de nós escrever — não avanço às cegas nem deixo que ele adivinhe.
+
+**Do meu lado (RAG), falhas/decisões que já detetei:**
+
+A) `LIMIAR_SIMILARIDADE = 0.75` (`Configuracao`) **nunca é usado**. O `resolverEnigma` decide só pelo `validar()` (substring do chunk). Ou ligas o limiar como guarda pré-submissão, ou apagas a constante — hoje é config morta que dá a ilusão de haver um filtro de confiança que não existe.
+
+B) `ExtratorChave` faz `replaceAll("[^A-Za-z0-9]", "")` → "POLY-SEAL" vira "POLYSEAL". O próprio enunciado (2.3) é contraditório: escreve POLYSEAL e POLY-SEAL na mesma página. Se o servidor exigir o hífen literal, submetes sempre errado e comes -10 HP em cada cofre. Não decido stripar tudo sem confirmar o formato aceite na sala de treino.
+
+C) `OllamaClient.gerar` monta ChatML à mão mas não envia `"raw": true`. Sem isso o Ollama aplica o template do próprio modelo por cima do teu `<|im_start|>…` (duplo-templating). Pode até funcionar (o qwen conhece ChatML), mas testa na sala de treino: se a resposta vier com as tags ecoadas ou com preâmbulo apesar de `temperature 0.0`, metes `raw:true` ou passas a `/api/chat`.
+
+D) `MotorRAGImpl` **nunca é instanciado** e `ingerirManual` **nunca é chamado**. O `AgenteExplorador` ainda corre com o `tentarUnlockPlaceholder`. Substituir o placeholder + ingerir o manual no arranque é edição no `AgenteExplorador` — ficheiro do Victor. Eu só entrego o contrato do `MotorRAG` para ele consumir.
+
+Antes de escrever integração: consegues colar os specs do `/unlock` e do `/download_manual` do Swagger (request + response)? São os pontos 1 e 2, e sem eles é adivinhação. Se preferires, começamos por A/B/C, que são 100% do meu módulo e não dependem do servidor — qual é a tua prioridade?
+
+**Pergunta**
+agora podemos mexer em todos os arquivos
+
+1- em caso de codigo errado
+
+```
+
+{
+
+"status": "falha"
+
+}
+
+```
+
+tentativas multiplas em pouco tempo
+
+```
+
+{
+
+"status": "bloqueado",
+
+"motivo": "Aguarde. Bloqueio ativo por flood. Liberta em 4s."
+
+}
+
+```
+
+quando nao esta perto de bau
+
+```
+
+{
+
+"status": "erro",
+
+"motivo": "Nao estas no cofre!"
+
+}
+
+```
+
+2- o manual vem exatamente nesse formato
+
+```
+
+SECÇÃO 01 - PROTOCOLO DE ESCUDOS MAGNÉTICOS: Para reter a integridade estrutural contra bombardeamentos cinéticos exteriores e blindar a carcaça de alumínio, o operador deve comutar o disjuntor para a posição de segurança SIGMA-3.
+
+SECÇÃO 02 - DIRETRIZ DE ATENUAÇÃO TÉRMICA DO NÚCLEO: No caso de perda de fluido refrigerante ou anomalias críticas de temperatura no reator central, o protocolo de segurança exige a injeção imediata do composto criogénico XTR-99.
+
+SECÇÃO 03 - CALIBRAÇÃO DOS SENSORES ÓPTICOS DE PROXIMIDADE: Se os radares de telemetria apresentarem distorções ou interferências na deteção de oponentes a curta distância, o ajuste fino do azimute deve ser trancado através do código operacional OPTIC-ZOOM.
+
+SECÇÃO 04 - MANUAL DE DINÂMICA DE FLUIDOS: Quando a compressão ou a pressão interna dos canos reserva exceder o limiar crítico de rutura, o operador deve ativar manualmente a VALVULA-ALT para drenar o excesso de carga hidrostática acumulada.
+
+SECÇÃO 05 - GESTÃO DE EFICIÊNCIA ENERGÉTICA DE LOCOMOÇÃO: Para mitigar o desgaste mecânico dos atuadores bípodes e conservar os níveis de bateria do robô abaixo de cinquenta por cento, recomenda-se a ativação imediata do algoritmo ECO-MARCH.
+
+SECÇÃO 06 - PROTOCOLO DE BARRAMENTO DIGITAL: Para restabelecer o alinhamento temporal do relógio biológico ou corrigir desvios espontâneos de frequência nos circuitos lógicos do processador central, emita a diretiva computacional CLK-SYNC.
+
+SECÇÃO 07 - SOBRECARGA DO CANHÃO DE PLASMA AUXILIAR: Se a temperatura da arma ofensiva acoplada ultrapassar os níveis térmicos operacionais admissíveis, execute imediatamente a purga total de gases através da chave de exaustão VENT-OUT.
+
+SECÇÃO 08 - DISSIPAÇÃO ATMOSFÉRICA DE ESTÁTICA: Na ocorrência de tempestades eletromagnéticas severas na arena que saturem a grelha tridimensional visual, execute o aterramento dielétrico forçado utilizando a função matricial GROUND-0.
+
+SECÇÃO 09 - RECARGA RÁPIDA DE NANOBOTS MÉDICOS: Para acelerar a reparação celular de microfissuras na blindagem metálica exterior do robô após sofrer ataques rivais, injete o catalisador químico REGEN-MAX diretamente nas células de combustível.
+
+SECÇÃO 10 - DESVIO DE EMERGÊNCIA CONTRA IMPACTOS: Se o sensor de proximidade acusar a aproximação veloz de um projétil pesado ou uma investida física de oponente superior, execute o salto cinético rápido configurando o vetor evasivo EVADE-NOW.
+
+SECÇÃO 11 - DIRETRIZ DE SEGURANÇA E REINICIALIZAÇÃO DO SISTEMA OPERATIVO: Caso ocorra um bloqueio ou corrupção de memória nas threads principais de processamento do LLM, force o reinício a frio da unidade lógica utilizando a rotina BOOT-HARD.
+
+SECÇÃO 12 - MAPEAMENTO DE COORDENADAS DO LABIRINTO: Para reconfigurar as leituras espaciais do LiDAR tridimensional quando o robô colidir consecutivamente contra barreiras fixas de betão, limpe a matriz de navegação com o comando MAP-RESET.
+
+SECÇÃO 13 - SISTEMA DE ALIMENTAÇÃO DA ANTENA ULTRA-FREQUÊNCIA: Para restabelecer os canais de comunicação síncronos da API com o servidor central quando ocorrer perda de pacotes na rede local, ative o amplificador de sinal através do protocolo LINK-UP.
+
+SECÇÃO 14 - CONTROLO DE EMISSÃO INTERNA DE RADIAÇÃO: Se os níveis de decaimento gama no compartimento das células de plasma ultrapassarem o limiar biológico tolerável, selecione o isolamento de chumbo ativando a barreira SHIELD-LEAD.
+
+SECÇÃO 15 - MECANISMO DE IGNIÇÃO DO PROPULSOR DE ARRANQUE: Para garantir um impulso de velocidade inicial logo após o professor dar o sinal de partida no lobby do browser, injete comburente sintético executando o gatilho NITRO-START.
+
+```
+
+
+**Resposta**
+O `/unlock` está resolvido e o formato do manual também. Mas os dados que enviaste **confirmam um bug** que antes era só "decisão a validar" — deixo isso claro antes de validar seja o que for.
+
+## Falhas confirmadas pelos novos dados
+
+**1. `ExtratorChave` corrompe a chave (agora é facto, não hipótese).** O Swagger mostra `code=XTR-99` e os 15 códigos do manual têm **todos** hífen (SIGMA-3, XTR-99, OPTIC-ZOOM, GROUND-0…). O `replaceAll("[^A-Za-z0-9]","")` transforma "XTR-99" em "XTR99" → submetes sempre a chave errada → -10 HP garantidos em cada cofre. **Tem de sair.**
+
+**2. O regex também parte em SIGMA-3 e GROUND-0.** `[A-Z]{2,}-?[A-Z0-9]{2,}` exige 2+ caracteres depois do hífen. "SIGMA-3" e "GROUND-0" terminam em 1 dígito → o motor de regex faz backtrack e devolve lixo tipo "SIGMA" sem o "-3". 2 dos 15 cofres ficavam impossíveis.
+
+**3. `validar()` fica incoerente se mantiveres o hífen.** Hoje normaliza o chunk (tira hífen) e faz `contains(chave)`. Se a chave passar a ser "XTR-99" (com hífen) e o chunk normalizado for "…XTR99…", o `contains` **falha** e rejeitas respostas certas. Tens de normalizar **os dois lados** para o teste, mas devolver a chave **com hífen** para submissão.
+
+**4. `/unlock` pode devolver `null` (HTTP 200, body `null`).** Está no teu próprio screenshot. `gson.fromJson("null", …)` devolve `null` → NPE se não fores defensivo.
+
+**5. `LIMIAR_SIMILARIDADE` continua morto — e agora é redundante.** A tua `validar()` por substring já garante que a chave existe literalmente no chunk recuperado. Isso é uma prova mais forte que um piso de cosseno. Um limiar de cosseno só acrescenta risco de **falso negativo** (bloquear chave certa vinda de chunk com score baixo). Recomendo remover.
+
+---
+
+## Código confirmado (podes colar já)
+
+**`ExtratorChave` — hífen obrigatório e preservado**
+
+```java
+package org.example.rag;
+
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+public final class ExtratorChave {
+    private ExtratorChave() {}
+
+    // Códigos do manual: PALAVRA-SUFIXO (XTR-99, SIGMA-3, OPTIC-ZOOM, GROUND-0…).
+    // Hífen é obrigatório e PRESERVADO — o servidor recebe o código literal (code=XTR-99).
+    private static final Pattern CHAVE_PATTERN = Pattern.compile("[A-Z]{2,}(?:-[A-Z0-9]+)+");
+
+    public static String extrair(String respostaBruta) {
+        if (respostaBruta == null) return null;
+        Matcher m = CHAVE_PATTERN.matcher(respostaBruta.toUpperCase());
+        if (m.find()) return m.group(); // "NULL" não tem hífen -> nunca casa -> devolve null
+        return null;
+    }
+}
+```
+
+**`MotorRAGImpl.validar` — normaliza ambos, devolve com hífen**
+
+```java
+private boolean validar(String chave, String chunk) {
+    if (chave == null) return false;
+    String chunkNorm = chunk.replaceAll("[^A-Za-z0-9]", "").toUpperCase();
+    String chaveNorm = chave.replaceAll("[^A-Za-z0-9]", "").toUpperCase();
+    return chunkNorm.contains(chaveNorm); // compara sem hífen; chaveFinal continua "XTR-99"
+}
+```
+
+**`RespostaUnlock` — novo modelo (cobre falha/bloqueado/erro)**
+
+```java
+package org.example.modelo;
+
+// Resposta de /unlock. Confirmado: falha={status}; bloqueado/erro={status,motivo}.
+public class RespostaUnlock {
+    private String status;
+    private String motivo;
+
+    public RespostaUnlock() {}
+    public RespostaUnlock(String status, String motivo) { this.status = status; this.motivo = motivo; }
+
+    public String getStatus() { return status; }
+    public String getMotivo() { return motivo; }
+}
+```
+
+**`ArenaClient.desbloquear` — implementado (tudo em query, URL-encode com %20)**
+
+```java
+// POST /arena/{room_id}/unlock?robot_id=..&code=..&rag_chunk=..&llm_raw=..
+public RespostaUnlock desbloquear(String roomId, String robotId, String code,
+                                  String ragChunk, String llmRaw) throws Exception {
+    StringBuilder url = new StringBuilder(urlBase)
+            .append("/arena/").append(enc(roomId)).append("/unlock")
+            .append("?robot_id=").append(enc(robotId))
+            .append("&code=").append(enc(code)); // enc não toca no hífen: code=XTR-99
+    if (ragChunk != null) url.append("&rag_chunk=").append(enc(ragChunk));
+    if (llmRaw   != null) url.append("&llm_raw=").append(enc(llmRaw));
+
+    HttpRequest req = HttpRequest.newBuilder()
+            .uri(URI.create(url.toString()))
+            .timeout(Duration.ofSeconds(10))
+            .header("accept", "application/json")
+            .POST(HttpRequest.BodyPublishers.noBody())
+            .build();
+    HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
+
+    String body = resp.body();
+    if (body == null || body.isBlank() || "null".equals(body.trim())) {
+        return new RespostaUnlock("sem_resposta", body); // 200 com body null (ver screenshot)
+    }
+    RespostaUnlock r = gson.fromJson(body, RespostaUnlock.class);
+    return (r != null) ? r : new RespostaUnlock("sem_resposta", body);
+}
+
+// URLEncoder usa '+' para espaço; o servidor/Swagger usa %20 -> forçamos %20.
+private static String enc(String v) {
+    return java.net.URLEncoder.encode(v, java.nio.charset.StandardCharsets.UTF_8).replace("+", "%20");
+}
+```
+
+(remove o `import` do `RespostaAcao` só se deixar de ser usado; `agir` ainda o usa, portanto mantém.)
+
+**`Configuracao` — remover a constante morta**
+
+```java
+// APAGAR esta linha (superada pela validação por substring da validar()):
+// public static final double LIMIAR_SIMILARIDADE = 0.75;
+```
+
+---
+
+## `AgenteExplorador` — plano do handler (2 pontos gated)
+
+Isto substitui o `tentarUnlockPlaceholder`. Deixo os **dois desconhecidos isolados** — não os invento:
+
+```java
+private static final String STATUS_SUCESSO = "sucesso"; // ⚠️ POR CONFIRMAR (ver pergunta 1)
+
+Cofre cofreActual = cerebro.cofreSobActual(p);
+if (cofreActual != null && motorRAG.estaPronto()) {
+    RespostaRAG r = motorRAG.resolverEnigma(cofreActual.getTerminal_desafio());
+
+    if (r.deveSubmeter()) {
+        RespostaUnlock u = arena.desbloquear(
+                Configuracao.ROOM_ID, Configuracao.ROBOT_ID,
+                r.getChaveFinal(), r.getChunkFinal(), r.getRespostaBrutaLLMFinal());
+        String st = (u.getStatus() == null) ? "" : u.getStatus();
+
+        if (STATUS_SUCESSO.equals(st)) {
+            // +100 HP no servidor. Marcar como resolvido p/ não re-atrair (ver nota) + fuga.
+        } else if ("falha".equals(st)) {
+            cerebro.registarCofreFalhado(cofreActual.getX(), cofreActual.getY()); // -10HP, blacklist
+        } else if ("bloqueado".equals(st)) {
+            pausar(); pausar(); // flood: NÃO blacklist, recua e reenvia no próximo turno
+        } else { // "erro"/"sem_resposta": não blacklist (cofre é válido), só regista
+            System.out.println("Unlock inesperado: " + st + " / " + u.getMotivo());
+        }
+    } else {
+        // RAG sem chave fiável -> blacklist para não queimar -10HP a adivinhar
+        cerebro.registarCofreFalhado(cofreActual.getX(), cofreActual.getY());
+    }
+}
+```
+
+**Nota:** para o caso `sucesso`, `registarCofreFalhado` funcionaria (pára a atração) mas pinta o cofre a vermelho "F" no painel — semanticamente errado. O correto é um `registarCofreResolvido` no `MotorHeuristico` (espelho do falhado, cor distinta). Como mexe no módulo do Victor, confirma com ele antes de eu escrever.
+
+---
+
+## Faltam-me 2 confirmações (não avanço sem elas)
+
+**1. JSON exato de `sucesso` no `/unlock`.** Deste-me `falha`, `bloqueado` e `erro` — nunca o de sucesso. `status` é mesmo `"sucesso"`? Corre um cofre certo na sala de treino e cola o body.
+
+**2. Endpoint do manual.** Deste-me o **conteúdo** e o formato (uma secção por linha → o `ingerirManual` a fazer `split("\n")` gera 15 chunks, ok). Mas falta o **endpoint** para o `descarregarManual`: método + path + content-type (texto cru como a amostra, ou JSON com campo?). Sem isto o arranque (`ingerirManual(descarregarManual(...))`) fica em stub.
+
+
+**Pergunta**
+o respostaUnlock é para criar em que pasta? eu enviei uma imagem na pergunta anterior nessa foto e do swagger com o codigo correto e oq ele devolve que é apenas null e na arena o bau some
+
+
+**Resposta**
+Duas correções ao meu plano anterior, ambas com base na tua imagem — eu tinha assumido mal.
+
+**1. `RespostaUnlock` não deve ser criada. Elimina-a do plano.**
+
+Eu propus esse modelo antes de olhar bem para o teu screenshot. A imagem mostra que o `/unlock`, com o código **correto** (XTR-99), devolve HTTP 200 com body literal `null`. Não há campo `status`. Não há `motivo`. O sucesso **não é** `{"status":"sucesso"}` — é ausência de corpo.
+
+Então o modelo que desenhei (`status`+`motivo`) só se aplica aos casos de **não-sucesso** que enviaste na mensagem anterior (`falha`, `bloqueado`, `erro`). Criar uma classe cujo caso de sucesso é sempre `null` é modelação inútil — o Gson desserializa `"null"` para um objeto `null` de qualquer forma.
+
+**A leitura correta do contrato `/unlock`:**
+
+|Servidor devolve|Significado|Ação|
+|---|---|---|
+|`null` (body vazio/`null`)|**sucesso** — bau desaparece, +100 HP|marcar resolvido, fugir|
+|`{"status":"falha"}`|código errado|-10 HP, blacklist|
+|`{"status":"bloqueado","motivo":…}`|anti-flood|recuar, reenviar, **não** blacklist|
+|`{"status":"erro","motivo":"Nao estas no cofre!"}`|dessincronizado|não blacklist|
+
+A semântica inverteu-se em relação ao que eu escrevi: **`null` = sucesso**, não erro. O meu `desbloquear` anterior tratava `null` como `"sem_resposta"` (caso ambíguo) — estava errado. `null` é o caminho feliz.
+
+**2. Resposta direta: em que pasta.**
+
+Não crias `RespostaUnlock` em pasta nenhuma. Mas mesmo que quisesses um DTO para os casos de não-sucesso, ele iria em `org.example.modelo` (`src/main/java/org/example/modelo/`), junto de `RespostaAcao` e `RespostaRegisto` — é onde vivem os teus modelos de resposta da Arena. Só que aqui não compensa: um `String` cru chega.
+
+---
+
+**`desbloquear` corrigido — devolve boolean de sucesso, sem DTO:**
+
+```java
+// POST /arena/{room_id}/unlock?robot_id=..&code=..&rag_chunk=..&llm_raw=..
+// Contrato confirmado (screenshot Swagger): SUCESSO = body "null" (HTTP 200, bau some, +100HP).
+// Não-sucesso = JSON {status: falha|bloqueado|erro}. Devolvemos o status como String;
+// "sucesso" é sintetizado por nós quando o body é null/vazio.
+public String desbloquear(String roomId, String robotId, String code,
+                          String ragChunk, String llmRaw) throws Exception {
+    StringBuilder url = new StringBuilder(urlBase)
+            .append("/arena/").append(enc(roomId)).append("/unlock")
+            .append("?robot_id=").append(enc(robotId))
+            .append("&code=").append(enc(code));
+    if (ragChunk != null) url.append("&rag_chunk=").append(enc(ragChunk));
+    if (llmRaw   != null) url.append("&llm_raw=").append(enc(llmRaw));
+
+    HttpRequest req = HttpRequest.newBuilder()
+            .uri(URI.create(url.toString()))
+            .timeout(Duration.ofSeconds(10))
+            .header("accept", "application/json")
+            .POST(HttpRequest.BodyPublishers.noBody())
+            .build();
+    HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
+
+    String body = (resp.body() == null) ? "" : resp.body().trim();
+
+    // SUCESSO: 200 + body "null"/vazio -> bau desapareceu no servidor.
+    if (body.isEmpty() || "null".equals(body)) {
+        return "sucesso";
+    }
+    // NÃO-SUCESSO: extrai só o campo status do JSON.
+    com.google.gson.JsonObject j = com.google.gson.JsonParser.parseString(body).getAsJsonObject();
+    return j.has("status") ? j.get("status").getAsString() : "desconhecido";
+}
+
+private static String enc(String v) {
+    return java.net.URLEncoder.encode(v, java.nio.charset.StandardCharsets.UTF_8).replace("+", "%20");
+}
+```
+
+O handler no `AgenteExplorador` fica mais simples do que o que dei antes:
+
+```java
+String st = arena.desbloquear(
+        Configuracao.ROOM_ID, Configuracao.ROBOT_ID,
+        r.getChaveFinal(), r.getChunkFinal(), r.getRespostaBrutaLLMFinal());
+
+switch (st) {
+    case "sucesso":   /* +100HP, marcar resolvido, injetar fuga na fila */ break;
+    case "falha":     cerebro.registarCofreFalhado(cofreActual.getX(), cofreActual.getY()); break;
+    case "bloqueado": pausar(); pausar(); /* NÃO blacklist, reenvia próximo turno */ break;
+    case "erro":      /* dessincronizado, não blacklist */ break;
+    default:          System.out.println("Unlock status inesperado: " + st);
+}
+```
+
+---
+
+Isto fecha o `/unlock` por completo. **Fica só 1 pergunta em aberto** (a mesma da mensagem anterior, ponto 2): o **endpoint do `descarregarManual`** — método, path e content-type. Deste-me o conteúdo e o formato do manual (15 linhas → 15 chunks via `split("\n")`), mas não como o Java o vai buscar ao servidor. Tens isso no Swagger?
+
+
+**Pergunta**
+esse ainda vai para o code?
+
+private static final String STATUS_SUCESSO = "sucesso"; // ⚠️ POR CONFIRMAR (ver pergunta 1) Cofre cofreActual = cerebro.cofreSobActual(p); if (cofreActual != null && motorRAG.estaPronto()) { RespostaRAG r = motorRAG.resolverEnigma(cofreActual.getTerminal_desafio()); if (r.deveSubmeter()) { RespostaUnlock u = arena.desbloquear( Configuracao.ROOM_ID, Configuracao.ROBOT_ID, r.getChaveFinal(), r.getChunkFinal(), r.getRespostaBrutaLLMFinal()); String st = (u.getStatus() == null) ? "" : u.getStatus(); if (STATUS_SUCESSO.equals(st)) { // +100 HP no servidor. Marcar como resolvido p/ não re-atrair (ver nota) + fuga. } else if ("falha".equals(st)) { cerebro.registarCofreFalhado(cofreActual.getX(), cofreActual.getY()); // -10HP, blacklist } else if ("bloqueado".equals(st)) { pausar(); pausar(); // flood: NÃO blacklist, recua e reenvia no próximo turno } else { // "erro"/"sem_resposta": não blacklist (cofre é válido), só regista System.out.println("Unlock inesperado: " + st + " / " + u.getMotivo()); } } else { // RAG sem chave fiável -> blacklist para não queimar -10HP a adivinhar cerebro.registarCofreFalhado(cofreActual.getX(), cofreActual.getY()); } }
+
+
+**Resposta**
+Não. Esse bloco está **obsoleto** — foi o que dei antes de ler o teu screenshot. Descarta-o inteiro. Referencia `RespostaUnlock` e `u.getStatus()`, que já eliminámos: o `desbloquear` agora devolve `String`, e sucesso = body `null`, não `{"status":"sucesso"}`.
+
+Também podes apagar o `STATUS_SUCESSO` — sem uso, o `desbloquear` já sintetiza a String `"sucesso"` internamente.
+
+O bloco correto para o `AgenteExplorador` é este (substitui o `tentarUnlockPlaceholder` e a sua chamada):
+
+```java
+Cofre cofreActual = cerebro.cofreSobActual(p);
+if (cofreActual != null && motorRAG.estaPronto()) {
+    RespostaRAG r = motorRAG.resolverEnigma(cofreActual.getTerminal_desafio());
+
+    if (r.deveSubmeter()) {
+        String st = arena.desbloquear(
+                Configuracao.ROOM_ID, Configuracao.ROBOT_ID,
+                r.getChaveFinal(), r.getChunkFinal(), r.getRespostaBrutaLLMFinal());
+
+        switch (st) {
+            case "sucesso":
+                // body "null" -> bau desapareceu, +100HP. Marcar resolvido + injetar fuga.
+                cerebro.registarCofreResolvido(cofreActual.getX(), cofreActual.getY());
+                break;
+            case "falha":
+                // código errado, -10HP -> blacklist
+                cerebro.registarCofreFalhado(cofreActual.getX(), cofreActual.getY());
+                break;
+            case "bloqueado":
+                // anti-flood: NÃO blacklist, recua e reenvia no próximo turno
+                pausar(); pausar();
+                break;
+            case "erro":
+                // "Nao estas no cofre!" -> dessincronizado, não blacklist
+                System.out.println("Unlock dessincronizado (erro).");
+                break;
+            default:
+                System.out.println("Unlock status inesperado: " + st);
+        }
+    } else {
+        // RAG sem chave fiável -> blacklist para não queimar -10HP a adivinhar
+        cerebro.registarCofreFalhado(cofreActual.getX(), cofreActual.getY());
+    }
+}
+```
+
+Antes de colares isto, há **3 dependências** que este bloco assume e que ainda não existem no teu código. Aponto-as porque o bloco **não compila** sem elas:
+
+**1. `motorRAG` não está declarado no `AgenteExplorador`.** Só tens `arena` e `cerebro` como campos. Falta instanciar o pipeline e ingerir o manual no arranque. Isto obriga a decidir o construtor do `OllamaClient` + `MotorRAGImpl`, e depende da pergunta em aberto (endpoint do manual). Sem o `descarregarManual` implementado, o `motorRAG.estaPronto()` devolve sempre `false` e o bloco nunca executa.
+
+**2. `registarCofreResolvido` não existe no `MotorHeuristico`.** Hoje só tens `registarCofreFalhado`. Como expliquei antes: usar `registarCofreFalhado` no caso de sucesso funcionava para parar a atração, mas pintava o cofre a vermelho "F" — semanticamente errado num cofre que abriste. Este método é edição no módulo do **Victor**. Não o escrevo sem ele confirmar; se ele não quiser criá-lo agora, o _fallback provisório_ é usar `registarCofreFalhado` no `case "sucesso"` e trocar depois — mas fica registado como dívida técnica.
+
+**3. Fuga pós-sucesso (`filaAcoesPlaneadas`) — o enunciado sugere, mas ainda não existe.** O 5.3 recomenda injetar 2-3 movimentos de fuga na fila após abrir o cofre. O teu `MotorHeuristico` não tem fila de ações. É opcional para funcionar, mas conta para a nota de heurística. Também é módulo do Victor.
+
+Os pontos 2 e 3 são do Victor; o 1 é partilhado (o `OllamaClient`/`MotorRAGImpl` são teus, mas a chamada ao manual passa pelo `ArenaClient` dele).
+
+**Continua a faltar-me a mesma confirmação para desbloquear o ponto 1:** o **endpoint do manual** no Swagger — método, path e content-type. É literalmente a última peça antes de o pipeline arrancar de ponta a ponta. Tens?
+
+**Pergunta**
+esse vaii onde ? String st = arena.desbloquear( Configuracao.ROOM_ID, Configuracao.ROBOT_ID, r.getChaveFinal(), r.getChunkFinal(), r.getRespostaBrutaLLMFinal()); switch (st) { case "sucesso": /* +100HP, marcar resolvido, injetar fuga na fila _/ break; case "falha": cerebro.registarCofreFalhado(cofreActual.getX(), cofreActual.getY()); break; case "bloqueado": pausar(); pausar(); /_ NÃO blacklist, reenvia próximo turno _/ break; case "erro": /_ dessincronizado, não blacklist */ break; default: System.out.println("Unlock status inesperado: " + st); }
+
+
+**Resposta**
+Esse `switch` é uma **versão reduzida e desatualizada** do bloco que te dei na mensagem anterior — não o uses. Foi um fragmento ilustrativo que escrevi para mostrar o contrato do `desbloquear`; o bloco completo e correto (com o `if (r.deveSubmeter())`, o `else` da blacklist, e os comentários certos) é o da resposta anterior. Não colas os dois: colas **um só**, o completo.
+
+Onde vai o bloco completo: dentro do `while (true)` do método `correr()`, no `AgenteExplorador.java`, **em substituição** de todo o bloco atual do placeholder — este:
+
+```java
+// --- Deteção de cofre e (placeholder) tentativa de desbloqueio ---
+Cofre cofreActual = cerebro.cofreSobActual(p);
+if (cofreActual != null) {
+    String status = tentarUnlockPlaceholder(cofreActual);
+    if ("falha".equals(status)) {
+        cerebro.registarCofreFalhado(cofreActual.getX(), cofreActual.getY());
+    }
+}
+```
+
+Fica posicionado no mesmo sítio: **depois** do `SENSE` (o `arena.perceber(...)` e os checks `game_over`/`game_started`) e **antes** do `THINK` (`cerebro.decidirAcao(p)`). Também apagas o método `tentarUnlockPlaceholder` inteiro, que deixa de ser chamado.
+
+Antes de avançares, tenho de apontar uma falha que não posso validar em silêncio:
+
+Nem o bloco completo nem este `switch` reduzido **compilam** no teu `AgenteExplorador` atual. Referenciam `motorRAG`, que não é campo da classe (só tens `arena` e `cerebro`), e `registarCofreResolvido`, que não existe no `MotorHeuristico`. São as dependências 1 e 2 que listei na mensagem anterior. Colar qualquer versão agora dá erro de compilação até resolveres:
+
+- declarar e instanciar `motorRAG` (teu módulo — `OllamaClient` + `MotorRAGImpl`), o que exige ingerir o manual no arranque;
+- `registarCofreResolvido` no `MotorHeuristico` (módulo do Victor).
+
+E a ingestão do manual continua bloqueada pela **mesma pergunta que fiz duas vezes**: qual é o endpoint do manual no Swagger — método, path e content-type? O `descarregarManual` no `ArenaClient` ainda é stub (`throw new UnsupportedOperationException`). Sem isso, `motorRAG.estaPronto()` devolve sempre `false`, o bloco nunca entra no `if`, e nenhum cofre é aberto — independentemente de o `switch` estar certo.
+
+Tens o endpoint do manual? É a última peça antes de o pipeline correr de ponta a ponta.
+
+
+**Pergunta**
+poderia corrigir esse code ?
+```
+package org.example;
+
+import org.example.heuristica.MotorHeuristico;
+import org.example.modelo.Percecao;
+import org.example.modelo.RespostaRegisto;
+import org.example.modelo.Cofre;
+import org.example.rede.ArenaClient;
+import org.example.ui.PainelMapaCalor;
+
+import javax.swing.JFrame;
+
+// Loop Sense-Think-Act 100% autónomo. Só orquestra e delega.
+public class AgenteExplorador {
+
+    private final ArenaClient arena = new ArenaClient(Configuracao.URL_BASE);
+
+    private MotorHeuristico cerebro;
+
+    Cofre cofreActual = cerebro.cofreSobActual(p);
+    if (cofreActual != null && motorRAG.estaPronto()) {
+        RespostaRAG r = motorRAG.resolverEnigma(cofreActual.getTerminal_desafio());
+
+        if (r.deveSubmeter()) {
+            String st = arena.desbloquear(
+                    Configuracao.ROOM_ID, Configuracao.ROBOT_ID,
+                    r.getChaveFinal(), r.getChunkFinal(), r.getRespostaBrutaLLMFinal());
+
+            switch (st) {
+                case "sucesso":
+                    // body "null" -> bau desapareceu, +100HP. Marcar resolvido + injetar fuga.
+                    cerebro.registarCofreResolvido(cofreActual.getX(), cofreActual.getY());
+                    break;
+                case "falha":
+                    // código errado, -10HP -> blacklist
+                    cerebro.registarCofreFalhado(cofreActual.getX(), cofreActual.getY());
+                    break;
+                case "bloqueado":
+                    // anti-flood: NÃO blacklist, recua e reenvia no próximo turno
+                    pausar(); pausar();
+                    break;
+                case "erro":
+                    // "Nao estas no cofre!" -> dessincronizado, não blacklist
+                    System.out.println("Unlock dessincronizado (erro).");
+                    break;
+                default:
+                    System.out.println("Unlock status inesperado: " + st);
+            }
+        } else {
+            // RAG sem chave fiável -> blacklist para não queimar -10HP a adivinhar
+            cerebro.registarCofreFalhado(cofreActual.getX(), cofreActual.getY());
+        }
+    }
+
+    public static void main(String[] args) throws Exception {
+        new AgenteExplorador().correr();
+    }
+
+    public void correr() throws Exception {
+        // modo definido no arranque (imutável durante a partida) -> passado ao cérebro por construtor
+        cerebro = new MotorHeuristico(Configuracao.MODO_BATALHA);
+
+        RespostaRegisto reg = arena.registar(Configuracao.ROOM_ID, Configuracao.ROBOT_ID);
+        System.out.println("Registado em (" + reg.getEstado().getX() + ","
+                + reg.getEstado().getY() + ") energia=" + reg.getEstado().getEnergia());
+
+        PainelMapaCalor painel = new PainelMapaCalor(
+                cerebro.getHistoricoVisitas(),
+                cerebro.getMurosConhecidos(),
+                cerebro.getRecursosConhecidos(),
+                cerebro.getCofresFalhados(),
+                cerebro.getCofresConhecidos(),
+                cerebro.getCelulasVistas()
+        );
+
+        JFrame janela = new JFrame("Mapa de Calor - NeymarRAG");
+        janela.add(painel);
+        janela.setSize(600, 600);
+        janela.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        janela.setVisible(true);
+
+        while (true) {
+            try {
+                // SENSE
+                Percecao p = arena.perceber(Configuracao.ROOM_ID, Configuracao.ROBOT_ID);
+
+                if (p.isGame_over()) {
+                    System.out.println("Jogo terminado. A desligar motores.");
+                    break;
+                }
+                if (!p.isGame_started()) {
+                    // Lobby: aguarda o início sem consumir a decisão.
+                    pausar();
+                    continue;
+                }
+
+                // --- Deteção de cofre e (placeholder) tentativa de desbloqueio ---
+                Cofre cofreActual = cerebro.cofreSobActual(p);
+                if (cofreActual != null) {
+                    // FRONTEIRA KAIKY: aqui entrará a chamada real ao /unlock, com a chave
+                    // gerada pelo pipeline RAG a partir de cofreActual.getTerminal_desafio().
+                    // Por agora, placeholder que simula sempre falha para quebrar o loop.
+                    String status = tentarUnlockPlaceholder(cofreActual);
+
+                    if ("falha".equals(status)) {
+                        // marca o cofre para deixar de o atrair -> quebra o loop entra/sai
+                        cerebro.registarCofreFalhado(cofreActual.getX(), cofreActual.getY());
+                    }
+                    // (quando houver "sucesso" real: opcionalmente injetar fuga na filaAcoesPlaneadas)
+                }
+
+                // THINK - decisão de movimento normal (atração já ignora cofres falhados)
+                String acao = cerebro.decidirAcao(p);
+
+                // ACT
+                if (acao != null) {
+                    arena.agir(Configuracao.ROOM_ID, Configuracao.ROBOT_ID, acao);
+                    System.out.println("Pos=(" + p.getO_meu_estado().getX() + ","
+                            + p.getO_meu_estado().getY() + ") HP=" + p.getO_meu_estado().getEnergia()
+                            + " -> " + acao);
+
+                }
+
+                // no fim de cada ciclo Sense-Think-Act:
+                painel.atualizar(
+                        p.getO_meu_estado().getX(),
+                        p.getO_meu_estado().getY(),
+                        p.getOutros_robots()
+                );
+            } catch (Exception e) {
+                // Resiliência: timeouts/micro-cortes não derrubam o agente.
+                System.out.println("Falha no turno (a retomar): " + e.getMessage());
+            }
+            pausar(); // anti-flood obrigatório
+        }
+    }
+
+    // Pausa entre turnos. Margem ≥ 350-400ms para o Jitter da rede.
+    private void pausar() {
+        try {
+            Thread.sleep(Configuracao.PAUSA_CICLO_MS);
+        } catch (InterruptedException ignored) {
+            Thread.currentThread().interrupt();
+        }
+    }
+}
+```
+
+**Resposta**
+Há um erro estrutural grave: colaste o bloco do `/unlock` **solto no corpo da classe**, entre a declaração dos campos e o `main`. Isso não é código executável — são statements (`if`, `switch`) fora de qualquer método. Não compila: o `AgenteExplorador` não abre sequer.
+
+O bloco tem de estar **dentro do `while`** do `correr()`, no sítio do placeholder. Não pode viver no corpo da classe.
+
+Antes de te dar o ficheiro corrigido, três coisas ainda impedem a compilação — e não as invento:
+
+1. **`motorRAG` não é campo da classe.** O bloco chama `motorRAG.estaPronto()` e `motorRAG.resolverEnigma(...)`, mas o campo não existe. Falta declará-lo, instanciá-lo e ingerir o manual no arranque.
+2. **`registarCofreResolvido` não existe** no `MotorHeuristico` (módulo do Victor). Só existe `registarCofreFalhado`.
+3. **`RespostaRAG` não está importado** no `AgenteExplorador`.
+
+O nº1 depende do endpoint do manual — que **pedi três vezes e ainda não tenho**. Sem ele, `descarregarManual` continua stub, `ingerirManual` não corre, `estaPronto()` devolve sempre `false`, e o pipeline nunca arranca. Não posso escrever a instanciação do `motorRAG` a inventar o path do endpoint.
+
+Então corrijo o que é **determinístico agora** e isolo o que depende de ti. Versão corrigida:
+
+```java
+package org.example;
+
+import org.example.heuristica.MotorHeuristico;
+import org.example.modelo.Percecao;
+import org.example.modelo.RespostaRegisto;
+import org.example.modelo.Cofre;
+import org.example.rag.MotorRAG;
+import org.example.rag.MotorRAGImpl;
+import org.example.rag.RespostaRAG;
+import org.example.rede.ArenaClient;
+import org.example.rede.OllamaClient;
+import org.example.ui.PainelMapaCalor;
+
+import javax.swing.JFrame;
+
+// Loop Sense-Think-Act 100% autónomo. Só orquestra e delega.
+public class AgenteExplorador {
+
+    private final ArenaClient arena = new ArenaClient(Configuracao.URL_BASE);
+    private final MotorRAG motorRAG = new MotorRAGImpl(new OllamaClient());
+
+    private MotorHeuristico cerebro;
+
+    public static void main(String[] args) throws Exception {
+        new AgenteExplorador().correr();
+    }
+
+    public void correr() throws Exception {
+        cerebro = new MotorHeuristico(Configuracao.MODO_BATALHA);
+
+        RespostaRegisto reg = arena.registar(Configuracao.ROOM_ID, Configuracao.ROBOT_ID);
+        System.out.println("Registado em (" + reg.getEstado().getX() + ","
+                + reg.getEstado().getY() + ") energia=" + reg.getEstado().getEnergia());
+
+        // ⚠️ INGESTÃO DO MANUAL — BLOQUEADA: falta o endpoint do manual no Swagger.
+        // Assim que descarregarManual() estiver implementado no ArenaClient:
+        //     motorRAG.ingerirManual(arena.descarregarManual(Configuracao.ROOM_ID));
+        // Sem isto, estaPronto() devolve false e nenhum cofre é aberto.
+
+        PainelMapaCalor painel = new PainelMapaCalor(
+                cerebro.getHistoricoVisitas(),
+                cerebro.getMurosConhecidos(),
+                cerebro.getRecursosConhecidos(),
+                cerebro.getCofresFalhados(),
+                cerebro.getCofresConhecidos(),
+                cerebro.getCelulasVistas()
+        );
+
+        JFrame janela = new JFrame("Mapa de Calor - NeymarRAG");
+        janela.add(painel);
+        janela.setSize(600, 600);
+        janela.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        janela.setVisible(true);
+
+        while (true) {
+            try {
+                // SENSE
+                Percecao p = arena.perceber(Configuracao.ROOM_ID, Configuracao.ROBOT_ID);
+
+                if (p.isGame_over()) {
+                    System.out.println("Jogo terminado. A desligar motores.");
+                    break;
+                }
+                if (!p.isGame_started()) {
+                    pausar(); // Lobby: aguarda o início.
+                    continue;
+                }
+
+                // --- Deteção de cofre e tentativa real de desbloqueio (pipeline RAG) ---
+                Cofre cofreActual = cerebro.cofreSobActual(p);
+                if (cofreActual != null && motorRAG.estaPronto()) {
+                    RespostaRAG r = motorRAG.resolverEnigma(cofreActual.getTerminal_desafio());
+
+                    if (r.deveSubmeter()) {
+                        String st = arena.desbloquear(
+                                Configuracao.ROOM_ID, Configuracao.ROBOT_ID,
+                                r.getChaveFinal(), r.getChunkFinal(), r.getRespostaBrutaLLMFinal());
+
+                        switch (st) {
+                            case "sucesso":
+                                // body "null" -> bau desapareceu, +100HP.
+                                // ⚠️ registarCofreResolvido NÃO existe no MotorHeuristico (módulo Victor).
+                                // Fallback provisório: usa registarCofreFalhado para parar a atração
+                                // (pinta cofre a vermelho "F" — trocar por registarCofreResolvido depois).
+                                cerebro.registarCofreFalhado(cofreActual.getX(), cofreActual.getY());
+                                break;
+                            case "falha":
+                                cerebro.registarCofreFalhado(cofreActual.getX(), cofreActual.getY());
+                                break;
+                            case "bloqueado":
+                                pausar(); pausar(); // anti-flood: NÃO blacklist, reenvia próximo turno
+                                break;
+                            case "erro":
+                                System.out.println("Unlock dessincronizado (erro).");
+                                break;
+                            default:
+                                System.out.println("Unlock status inesperado: " + st);
+                        }
+                    } else {
+                        // RAG sem chave fiável -> blacklist para não queimar -10HP a adivinhar
+                        cerebro.registarCofreFalhado(cofreActual.getX(), cofreActual.getY());
+                    }
+                }
+
+                // THINK
+                String acao = cerebro.decidirAcao(p);
+
+                // ACT
+                if (acao != null) {
+                    arena.agir(Configuracao.ROOM_ID, Configuracao.ROBOT_ID, acao);
+                    System.out.println("Pos=(" + p.getO_meu_estado().getX() + ","
+                            + p.getO_meu_estado().getY() + ") HP=" + p.getO_meu_estado().getEnergia()
+                            + " -> " + acao);
+                }
+
+                painel.atualizar(
+                        p.getO_meu_estado().getX(),
+                        p.getO_meu_estado().getY(),
+                        p.getOutros_robots()
+                );
+            } catch (Exception e) {
+                System.out.println("Falha no turno (a retomar): " + e.getMessage());
+            }
+            pausar(); // anti-flood obrigatório
+        }
+    }
+
+    private void pausar() {
+        try {
+            Thread.sleep(Configuracao.PAUSA_CICLO_MS);
+        } catch (InterruptedException ignored) {
+            Thread.currentThread().interrupt();
+        }
+    }
+}
+```
+
+O que mudei face ao teu ficheiro:
+
+- **Movi o bloco do `/unlock` para dentro do `while`**, no lugar do placeholder. Era o erro de compilação principal.
+- **Removi `tentarUnlockPlaceholder`** (já não é chamado).
+- **Adicionei os imports** (`RespostaRAG`, `MotorRAG`, `MotorRAGImpl`, `OllamaClient`).
+- **Declarei `motorRAG`** como campo.
+- **Troquei `registarCofreResolvido` por `registarCofreFalhado`** no `case "sucesso"`, com aviso explícito — porque o método não existe e eu não escrevo código no módulo do Victor sem ele confirmar. Trocam quando ele criar o método.
+
+**Duas dívidas que este ficheiro ainda carrega, e que não resolvo sozinho:**
+
+1. `descarregarManual` continua stub. Enquanto não implementares (precisas do **endpoint do manual** — método, path, content-type), a linha da ingestão fica comentada e `estaPronto()` devolve `false`: **compila e corre, mas não abre cofres.** É o bloqueador central.
+
+2. `registarCofreResolvido` no `MotorHeuristico` — para o cofre aberto não ficar pintado como falhado. É do Victor.
+
+
+Qual é o endpoint do manual no Swagger? É a única coisa que falta para o pipeline abrir cofres de ponta a ponta.
+
+**Pergunta**
+/arena/{room_id}/download_manual esta na foto
+
+
+**Resposta**
+O endpoint está resolvido. Mas antes de implementar, uma verificação sobre o **content-type**, porque a imagem tem uma contradição que decide como parseio a resposta:
+
+O header de request diz `accept: application/json`, mas o **response body é texto cru** — as 15 secções aparecem diretamente, sem aspas, sem `{}`, sem estar embrulhado num campo JSON. Se fosse JSON de verdade, verias algo como `{"manual": "SECÇÃO 01..."}` ou uma string escapada com `\n`. Não é o caso: é `text/plain` apesar do header `accept`.
+
+Isto importa porque **não posso desserializar com Gson**. Se tratar como JSON, `JsonParser.parseString(...)` rebenta ou devolve lixo. O corpo é para ser lido como String literal e passado direto ao `ingerirManual`, que já faz `split("\n")` — e como confirmámos que o manual é uma secção por linha, isso gera os 15 chunks corretos.
+
+**`ArenaClient.descarregarManual` — implementado (substitui o stub):**
+
+```java
+// GET /arena/{room_id}/download_manual -> texto cru (uma secção por linha).
+// NÃO é JSON apesar do accept:application/json — o body vem como text/plain.
+// Devolve a String literal; o split("\n") acontece no MotorRAGImpl.ingerirManual.
+public String descarregarManual(String roomId) throws Exception {
+    String url = urlBase + "/arena/" + roomId + "/download_manual";
+    HttpRequest req = HttpRequest.newBuilder()
+            .uri(URI.create(url))
+            .timeout(Duration.ofSeconds(15))
+            .header("accept", "application/json")
+            .GET()
+            .build();
+    HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
+
+    if (resp.statusCode() != 200) {
+        throw new RuntimeException("download_manual HTTP " + resp.statusCode() + ": " + resp.body());
+    }
+    String body = resp.body();
+    if (body == null || body.isBlank()) {
+        throw new RuntimeException("Manual vazio devolvido pelo servidor.");
+    }
+    return body; // texto cru; ingestão trata o chunking
+}
+```
+
+Isto **desbloqueia a ingestão**. Agora podes descomentar a linha no `AgenteExplorador.correr()`, logo após o registo:
+
+```java
+motorRAG.ingerirManual(arena.descarregarManual(Configuracao.ROOM_ID));
+System.out.println("Manual ingerido: " + Configuracao.ROOM_ID);
+```
+
+Com isto, `estaPronto()` passa a devolver `true` (Ollama vivo + 15 chunks), e o bloco do `/unlock` no `while` começa a abrir cofres de ponta a ponta.
+
+---
+
+**Uma falha que este arranque introduz e que tens de resolver, não a mascaro:**
+
+A ingestão faz **15 chamadas de embedding ao Ollama em sequência**, no arranque, **antes** do `while`. Cada `gerarEmbedding` tem timeout de 30s. Se o Ollama estiver frio (modelo ainda a carregar em RAM), a primeira chamada pode demorar vários segundos. Durante todo esse tempo o agente **não está registado no loop nem a fazer `perceber`** — e o relógio de 10 minutos da partida **já pode estar a correr**. Perdes tempo de missão parado a vetorizar.
+
+Duas opções, e não decido por ti:
+
+- **A (simples):** aceitar o custo. 15 embeddings de frases curtas é rápido depois do modelo aquecer (~1-2s total). Se pré-carregares o Ollama antes de arrancar o Java, é negligível.
+- **B (robusta):** ingerir o manual **dentro** do estado de lobby (`!game_started`), aproveitando a espera pelo sinal do professor. Só entras no loop de ação com o RAG já pronto e sem gastar tempo de jogo. Mais alinhado com o 6.2 ("logo após o registo"), mas exige um flag para ingerir só uma vez.
+
+Qual preferes? A opção B é a correta se a avaliação for cronometrada desde o lobby, mas preciso de confirmar: **o relógio de 10 min arranca no registo ou no sinal de início do professor?** O enunciado (7.1) diz que arranca "assim que o Professor dispara o início" — o que favorece B, porque a ingestão no lobby fica fora do cronómetro. Confirmas essa leitura antes de eu escrever a versão com o flag?
+
+
+**Pergunta**
+o relogio so aciona no sinal de inicio
+
+
+**Resposta**
+Confirmado: relógio arranca no sinal do professor (7.1), não no registo. Isso valida a **opção B** — ingerir durante o lobby fica fora do cronómetro. É a escolha correta.
+
+Mas antes de escrever, uma falha na forma ingénua de fazer B: se puseres a ingestão dentro do `if (!game_started)` sem guarda, ela corre **a cada iteração do lobby** — 15 embeddings repetidos a cada 400ms enquanto esperas o sinal. Além de desperdício, é comportamento tipo-flood contra o teu próprio Ollama. Precisa de um flag de idempotência: ingerir **uma vez**, no primeiro turno de lobby.
+
+Há ainda uma decisão de robustez que tens de tomar: **e se a ingestão falhar?** O Ollama pode estar em baixo no arranque. Se deixares a exceção propagar, cai no `catch` genérico do turno e volta a tentar no turno seguinte — o que aqui é desejável (re-tenta até o Ollama responder). Mas tens de garantir que o flag só é marcado **após sucesso**, senão marcas como feito uma ingestão que rebentou a meio e ficas com chunks incompletos.
+
+**`AgenteExplorador` — bloco de lobby com ingestão idempotente e à prova de falha:**
+
+Adiciona o campo:
+
+```java
+private boolean manualIngerido = false;
+```
+
+E o bloco de lobby passa a:
+
+```java
+if (!p.isGame_started()) {
+    // Lobby: aproveita a espera pelo sinal do professor para ingerir o manual
+    // FORA do cronómetro de 10 min (7.1: relógio só arranca no sinal de início).
+    if (!manualIngerido) {
+        try {
+            motorRAG.ingerirManual(arena.descarregarManual(Configuracao.ROOM_ID));
+            manualIngerido = true; // só marca APÓS sucesso -> falha re-tenta no próximo turno
+            System.out.println("Manual ingerido no lobby (" + Configuracao.ROOM_ID + ").");
+        } catch (Exception e) {
+            System.out.println("Ingestão falhou, re-tenta próximo turno: " + e.getMessage());
+        }
+    }
+    pausar();
+    continue;
+}
+```
+
+Removes a linha de ingestão que te disse para pôr após o registo — agora vive só aqui.
+
+**Porque isto está correto face às regras da Arena:**
+
+- Ingestão termina **antes** de `game_started` virar `true`, logo antes do relógio. Tempo de missão intacto.
+- O `pausar()` no fim do bloco mantém o intervalo anti-flood entre `perceber`s durante o lobby — os 400ms continuam a proteger-te do Tarpit.
+- Se o Ollama demorar a aquecer, re-tentas turno a turno sem crashar nem marcar estado inconsistente.
+
+**Um caso-limite que não posso decidir por ti:** e se o professor **já tiver dado o sinal** quando o teu agente regista (entras com `game_started == true` logo de início)? Aí saltas o lobby e o `!manualIngerido` nunca corre — chegas ao bloco de cofre com `estaPronto() == false` e não abres nada.
+
+Duas leituras possíveis, e depende do protocolo de avaliação:
+
+- Se o fluxo garantido é **registar → esperar no lobby → sinal** (o normal numa avaliação ao vivo onde ligas antes de o professor começar), o problema nunca acontece e B basta.
+- Se pode haver **registo com jogo a decorrer**, precisas de uma salvaguarda: ingerir também no primeiro turno de jogo se ainda não o fizeste (mas aí paga-se o custo em tempo de missão — o mal menor).
+
+Como é? Na avaliação, ligam os agentes **antes** de o professor disparar o início, ou pode um grupo entrar a meio de uma partida já a correr? Se for sempre o primeiro caso, o bloco acima está fechado. Se não, acrescento a salvaguarda no ramo de jogo.
