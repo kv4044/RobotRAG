@@ -1,5 +1,7 @@
 package org.example.ui;
 
+import org.example.modelo.*;
+
 import javax.swing.JPanel;
 import java.awt.Color;
 import java.awt.Font;
@@ -16,6 +18,11 @@ public class PainelMapaCalor extends JPanel {
     private final Set<String> murosConhecidos;
     private final Set<String> recursosConhecidos;
     private final Set<String> cofresFalhados;
+    private final Set<String> cofresConhecidos;
+    private final Set<String> celulasVistas;
+
+    // posições dos rivais NESTE turno (transitório; não é memória persistente)
+    private java.util.Map<String, OutroRobot> rivais;
 
     private int xRobo = 0;
     private int yRobo = 0;
@@ -27,18 +34,23 @@ public class PainelMapaCalor extends JPanel {
     public PainelMapaCalor(Map<String, Integer> historicoVisitas,
                            Set<String> murosConhecidos,
                            Set<String> recursosConhecidos,
-                           Set<String> cofresFalhados) {
+                           Set<String> cofresConhecidos,
+                           Set<String> cofresFalhados,
+                           Set<String> celulasVistas) {
         this.historicoVisitas = historicoVisitas;
         this.murosConhecidos = murosConhecidos;
         this.recursosConhecidos = recursosConhecidos;
+        this.cofresConhecidos = cofresConhecidos;
         this.cofresFalhados = cofresFalhados;
+        this.celulasVistas = celulasVistas;
         setBackground(Color.BLACK);
     }
 
     // só posição do robô muda por chamada; o resto é lido dos conjuntos partilhados
-    public void atualizar(int x, int y) {
+    public void atualizar(int x, int y, java.util.Map<String, OutroRobot> rivais) {
         this.xRobo = x;
         this.yRobo = y;
+        this.rivais = rivais;
         repaint();
     }
 
@@ -48,10 +60,12 @@ public class PainelMapaCalor extends JPanel {
         Graphics2D g2 = (Graphics2D) g;
 
         int maxX = xRobo, maxY = yRobo;
-        for (String k : historicoVisitas.keySet())   { int[] c = parseChave(k); maxX = Math.max(maxX, c[0]); maxY = Math.max(maxY, c[1]); }
-        for (String k : murosConhecidos)             { int[] c = parseChave(k); maxX = Math.max(maxX, c[0]); maxY = Math.max(maxY, c[1]); }
-        for (String k : recursosConhecidos)          { int[] c = parseChave(k); maxX = Math.max(maxX, c[0]); maxY = Math.max(maxY, c[1]); }
-        for (String k : cofresFalhados)              { int[] c = parseChave(k); maxX = Math.max(maxX, c[0]); maxY = Math.max(maxY, c[1]); }
+        for (String k : historicoVisitas.keySet())  { int[] c = parseChave(k); maxX = Math.max(maxX, c[0]); maxY = Math.max(maxY, c[1]); }
+    for (String k : murosConhecidos)                { int[] c = parseChave(k); maxX = Math.max(maxX, c[0]); maxY = Math.max(maxY, c[1]); }
+    for (String k : recursosConhecidos)             { int[] c = parseChave(k); maxX = Math.max(maxX, c[0]); maxY = Math.max(maxY, c[1]); }
+    for (String k : cofresFalhados)                 { int[] c = parseChave(k); maxX = Math.max(maxX, c[0]); maxY = Math.max(maxY, c[1]); }
+    for (String k : cofresConhecidos)               { int[] c = parseChave(k); maxX = Math.max(maxX, c[0]); maxY = Math.max(maxY, c[1]); }
+    for (String k : celulasVistas)                  { int[] c = parseChave(k); maxX = Math.max(maxX, c[0]); maxY = Math.max(maxY, c[1]); }
 
         int colunas = maxX + 1, linhas = maxY + 1;
         int lado = Math.min(getWidth() / colunas, getHeight() / linhas);
@@ -65,6 +79,14 @@ public class PainelMapaCalor extends JPanel {
             g2.setColor(COR_ANDADA);
             g2.fillRect(px, py, lado, lado);
             desenharTextoCentrado(g2, String.valueOf(e.getValue()), px, py, lado, Color.WHITE);
+        }
+
+        // casas vistas mas não andadas: cinza (o desconhecido fica preto = fundo, sem desenho)
+        g2.setColor(new Color(70, 70, 70));
+        for (String k : celulasVistas) {
+            if (historicoVisitas.containsKey(k)) continue; // andada desenha-se a azul depois
+            int[] c = parseChave(k);
+            g2.fillRect(c[0] * lado, (linhas - 1 - c[1]) * lado, lado, lado);
         }
 
         // muros (castanho) — memória do motor
@@ -81,13 +103,27 @@ public class PainelMapaCalor extends JPanel {
             g2.fillRect(c[0] * lado, (linhas - 1 - c[1]) * lado, lado, lado);
         }
 
-        // cofres falhados (vermelho) com "F" central
-        for (String k : cofresFalhados) {
+        // rivais (magenta) — posição do turno atual; sobrepõe-se ao mapa
+        if (rivais != null) {
+            g2.setColor(new Color(236, 72, 153)); // tom distinto do ciano do robô
+            for (OutroRobot r : rivais.values()) {
+                int px = r.getX() * lado, py = (linhas - 1 - r.getY()) * lado;
+                g2.fillRect(px, py, lado, lado);
+            }
+        }
+
+        // cofres conhecidos: amarelo por defeito; se falhado, vermelho com "F"
+        for (String k : cofresConhecidos) {
             int[] c = parseChave(k);
             int px = c[0] * lado, py = (linhas - 1 - c[1]) * lado;
-            g2.setColor(new Color(120, 30, 30));
-            g2.fillRect(px, py, lado, lado);
-            desenharTextoCentrado(g2, "F", px, py, lado, Color.WHITE);
+            if (cofresFalhados.contains(k)) {
+                g2.setColor(new Color(120, 30, 30));
+                g2.fillRect(px, py, lado, lado);
+                desenharTextoCentrado(g2, "F", px, py, lado, Color.WHITE);
+            } else {
+                g2.setColor(Color.YELLOW);
+                g2.fillRect(px, py, lado, lado);
+            }
         }
 
         // grelha

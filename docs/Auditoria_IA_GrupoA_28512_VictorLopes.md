@@ -3566,96 +3566,896 @@ Confirma os pontos 1 e 2 e responde às duas decisões, e escrevo o código.
 
 **PROMPT**
 
-
+      algumas questões que necessitam de alteração são:
+      
+      1. cofre tem que aparecer no heatmap mesmo antes de chegar nele apenas como campo dev visão e depois manter o f de falho
+         2. tudo que ta no campo de visão tem que ser salvo na memoria e heat map ao andar perto da parede e ver que o path em volta da parede não tem nada nao precisa ir precisa salvar que ele viu não ter nada la e ir para aonde não foi mapeado precisa saber detectar as bordas do mapa pra se locomover para outros pontos do mapa que não foi visualizado
+         3. faça com que os quadrados vistos mesmo que nao andados ficam em cinza e o que nao se sabe nada em preto, o campo de visão é nossa coisa mais importante
 
 **RESPOSTA**
 
-
+      Classificação: os três pedidos são navegação/memória/UI — teu domínio, sem cruzar o Kaiky. O pedido 1 está desbloqueado (coordenadas de cofre já confirmadas); os pedidos 2 e 3 estão ligados e dependem de uma confirmação de API antes de eu escrever código.
+      
+      ---
+      
+      **1. Cofre visível no mapa (amarelo) + "F" quando falha — desbloqueado, entrego já.**
+      
+      Hoje o painel só desenha `cofresFalhados`, por isso um cofre visto mas ainda não falhado não aparece. Falta um conjunto `cofresConhecidos` (todos os cofres avistados), separado de `cofresFalhados`.
+      
+      `MotorHeuristico` — novo campo (junto aos outros conjuntos de memória):
+      
+      ```java
+      // cofres avistados no raio de visão; desenhados no mapa mesmo antes de lá chegar
+      private final Set<String> cofresConhecidos = new HashSet<>();
+      ```
+      
+      No `decidirAcao`, a memorizar (junto ao bloco dos muros):
+      
+      ```java
+      // memoriza cofres visíveis para os mostrar no mapa mesmo antes de os pisar
+      if (p.getCofres_no_mundo() != null) {
+          for (Cofre c : p.getCofres_no_mundo()) {
+              cofresConhecidos.add(chave(c.getX(), c.getY()));
+          }
+      }
+      ```
+      
+      Getter só-de-leitura (junto aos outros):
+      
+      ```java
+      public Set<String> getCofresConhecidos() { return Collections.unmodifiableSet(cofresConhecidos); }
+      ```
+      
+      `PainelMapaCalor` — recebe `cofresConhecidos` no construtor e substitui o bloco atual dos cofres por:
+      
+      ```java
+      // cofres conhecidos: amarelo por defeito; se falhado, vermelho com "F"
+      for (String k : cofresConhecidos) {
+          int[] c = parseChave(k);
+          int px = c[0] * lado, py = (linhas - 1 - c[1]) * lado;
+          if (cofresFalhados.contains(k)) {
+              g2.setColor(new Color(120, 30, 30));
+              g2.fillRect(px, py, lado, lado);
+              desenharTextoCentrado(g2, "F", px, py, lado, Color.WHITE);
+          } else {
+              g2.setColor(Color.YELLOW);
+              g2.fillRect(px, py, lado, lado);
+          }
+      }
+      ```
+      
+      Ajusta o construtor do painel e a construção no `AgenteExplorador` para passar também `cerebro.getCofresConhecidos()`. Decisão (auditoria): um cofre falhado continua em `cofresConhecidos` (foi avistado) e também em `cofresFalhados` — o "F" tem prioridade no desenho.
+      
+      ---
+      
+      **2 e 3. Memória de campo de visão + cinza/preto + exploração para o não-mapeado — bloqueados numa confirmação de API e numa decisão de desenho.**
+      
+      O que pedes exige um conjunto novo: **`celulasVistas`** (todas as casas que já entraram no campo de visão, mesmo vazias e não pisadas). É isto que alimenta o cinza (visto) vs preto (desconhecido) e a exploração para zonas não vistas. Sem ele nenhum dos dois pedidos se faz.
+      
+      O problema é *como* saber que uma casa **vazia** foi vista. O `/perceive` que me mostraste devolve listas de **objetos** (`objetos_fixos`, `recursos_no_mundo`, `cofres_no_mundo`) — não uma lista de casas vazias visíveis. Por §6 não posso assumir que existe tal campo.
+      
+      **Confirma no Swagger:** o `/perceive` devolve algum campo com as **células/casas visíveis** (ex.: uma grelha ou lista de coordenadas dentro do raio), ou apenas as listas de objetos?
+      
+      - Se **devolver** as células visíveis → uso esse campo diretamente (diz-me o nome exato).
+        - Se **só objetos** → calculamos a visibilidade nós: para cada casa dentro do raio 4.5, testar linha de visão (a reta robô→casa não cruza muro conhecido); as que passam entram em `celulasVistas`. Isto é geometria pura no `cerebro` (teu domínio), mas é código novo com peso — só o escrevo depois de confirmares que não há campo pronto, para não duplicar o que o servidor já dá.
+      
+      **Decisão de desenho (pedido 3), pende do acima:** com `celulasVistas`, o painel desenha: casa andada = azul com número; casa **vista mas não andada** = cinza; casa **desconhecida** = preto (fundo, sem desenho). Trivial assim que `celulasVistas` existir.
+      
+      **Decisão de algoritmo (pedido 2 — "ir para o não-mapeado"):** hoje o fallback é `passoMaisFrio` (casa andada mais fria). O que descreves é **exploração por fronteira**: não perseguir a casa menos-pisada, mas navegar até à casa **desconhecida** mais próxima (a fronteira entre visto e preto), ignorando zonas que já *viu* estarem vazias mesmo sem lá andar. Isto substitui o `passoMaisFrio` por uma pesquisa até à fronteira. Duas formas:
+      
+      - **(A) Guloso** — entre os passos válidos, preferir o que leva a uma casa ainda não vista; se todos já vistos, cai no mais frio. Simples, mas pode encravar quando o desconhecido está longe (todos os adjacentes já vistos).
+        - **(B) BFS até à fronteira** — pesquisa a casa desconhecida alcançável mais próxima (através de casas vistas e caminháveis, contornando `murosConhecidos`) e dá o primeiro passo dessa rota. É o que resolve "locomover para outros pontos do mapa não visualizados" e é a base do grafo de menor custo que querias. Mais código, mas é o correto para o que pedes.
+      
+      Recomendo **(B)**. "Detetar as bordas do mapa" resolve-se sozinho aqui: as bordas são `murosConhecidos`; quando uma região fica cercada por muros/casas vistas, deixa de ter fronteira e o BFS procura fronteira noutro sítio.
+      
+      Responde a: (i) o `/perceive` tem campo de células visíveis ou só objetos? (ii) exploração por fronteira em **A** ou **B**? Com isto escrevo `celulasVistas` + o desenho cinza/preto + a nova lógica de exploração, em trechos.
 
 ---
 
 **PROMPT**
 
-
+      vamos fazer por bfs a questao é a seguinte ele nao devolve casas não visitadas porem como sabe que ele enxerga tudo num raio de 4 blocos e se nao devolve nem cofre,recurso ou parede pode contar aquilo como chao nao andado ja que nao tem como ser nada alem disso
 
 **RESPOSTA**
 
-
+      Classificação: navegação/memória/UI — teu domínio, sem cruzar o Kaiky. Confirmação de API resolvida por ti: o /perceive não devolve casas vazias, mas dentro do raio 4.5 tudo o que não é muro/recurso/cofre é chão visto. Uso essa regra — é dedução geométrica tua, não suposição de chave.
+      Antes do código, tenho de fechar dois pontos que mudam o resultado do BFS. Não suponho nenhum.
+      1. Oclusão — o raio vê "em bola" ou o servidor já filtra paredes?
+         A §7 diz que muros bloqueiam o radar (oclusão). Se eu marcar como "chão visto" todas as casas dentro do raio 4.5, vou marcar casas que estão atrás de um muro e que o robô na verdade não vê. Isso corrompe a memória (marca como visto o que é desconhecido) e o BFS pode mandar o robô "explorar" uma zona que ele nunca viu.
+         Duas hipóteses, preciso que confirmes qual:
+      
+      (A) O /perceive já só devolve objetos com linha de visão limpa (o servidor faz a oclusão). Então as casas sem objeto dentro do raio podem estar visíveis ou ocultas por muro — e eu não consigo distinguir as duas sem calcular a linha de visão eu próprio.
+      (B) Aceitas uma aproximação: marco como "chão visto" as casas dentro do raio cuja linha reta até ao robô não cruza um murosConhecidos. É o mesmo teste de oclusão que o enunciado descreve. Mais fiel, mas é geometria extra.
+      
+      Qual queres? Se disseres "marca tudo no raio sem testar oclusão", faço — mas fica registado que sobre-estima o visto (aceitável se preferires simplicidade). Recomendo B: respeita a oclusão da §7 e evita memória falsa.
+      2. Forma do raio: distância 4.5 é euclidiana ou Chebyshev/Manhattan?
+         "4.5 unidades de distância" (§7) — para varrer as casas dentro do raio preciso da métrica:
+      
+      Euclidiana: dx² + dy² ≤ 4.5² → forma de círculo (alcança até 4 casas ortogonais, cantos mais curtos).
+      Chebyshev: max(|dx|,|dy|) ≤ 4 → quadrado 9×9.
+      
+      Isto decide exatamente que casas entram em celulasVistas por turno. Como o valor é 4.5 (não inteiro), inclino-me para euclidiana (≤ 4.5), que bate certo com "raio". Confirmas euclidiana, ou o servidor usa outra forma?
+      
+      Assumindo que confirmas B + euclidiana, o desenho da solução (para validares antes de eu escrever):
+      
+      Novo campo celulasVistas (Set<String>) no cerebro. A cada turno, varrer as casas com dist(robô, casa) ≤ 4.5 que passem no teste de oclusão contra murosConhecidos; as que não são muro/recurso/cofre entram como chão visto. Muros/recursos/cofres já têm os seus próprios conjuntos.
+      Desenho (pedido 3): andada = azul+número; vista não-andada = cinza; desconhecida = preto (fundo). celulasVistas alimenta o cinza.
+      BFS de exploração (substitui passoMaisFrio como fallback): quando não há alvo (recurso/cofre), BFS a partir da posição atual, expandindo por casas caminháveis (não em murosConhecidos), até encontrar a casa desconhecida mais próxima (não em celulasVistas e não muro). Devolve o primeiro passo dessa rota. Assim o robô ignora zonas que já viu estarem vazias e vai direto à fronteira do não-mapeado. "Bordas do mapa" = quando a fronteira só confina com muros, o BFS procura fronteira noutra direção sozinho.
+      Fallback do fallback: se o BFS não encontrar nenhuma casa desconhecida alcançável (mapa todo explorado ou robô cercado), cai no passoMaisFrio atual para não parar.
+      
+      Uma decisão de desenho do BFS para auditoria: expando a pesquisa através de casas já vistas/andadas caminháveis (o robô pode atravessá-las) e paro no primeiro desconhecido. O custo é nº de passos (uniforme), por isso BFS dá o caminho mais curto sem precisar de A*. O A* com pesos (inimigos, etc.) é a fase seguinte — este BFS é a base.
+      Confirma 1 (A ou B) e 2 (métrica do raio) e escrevo, em trechos: o celulasVistas + varrimento, o getCelulasVistas(), o novo bloco de desenho cinza/preto, e o BFS de exploração.
 
 ---
 
 **PROMPT**
 
-
+      vamos fazer a opção B e a metrica do raio esta ok sobre o campo de visão ao ter uma diagonal que mostra cofre ele aparece claro que se tiver uma parede não entao o campo de visão tem que ser diminuido pra uma certa direção caso veja uma parede o campo de visão não pode passar dela
 
 **RESPOSTA**
 
-
+      Instrução base recebida na íntegra. Autoverificação: não suponho chaves (uso getObjetos_fixos/getRecursos_no_mundo/getCofres_no_mundo já confirmados); não cruza Kaiky; SRP mantido (memória+geometria no cerebro, desenho no painel); chat-only; português.
+      Confirmado: opção B (oclusão contra murosConhecidos), raio euclidiano ≤ 4.5, e a parede corta a visão na sua direção (linha de visão bloqueada = casa fica desconhecida).
+      Antes do código, uma confirmação sobre o teste de oclusão, porque define a geometria e não quero supor:
+      O teste de linha de visão vai amostrar a reta do robô até cada casa e, se algum ponto dessa reta cair numa casa de murosConhecidos, a casa-alvo fica oculta (não entra em celulasVistas). A questão: o muro em si deve contar como visto? Proponho sim — o robô vê a parede que o bloqueia (é o que o desenha no mapa), mas não vê nada para lá dela. Ou seja: a casa do muro é visível; casas atrás do muro não. Confirmas?
+      Assumindo que sim, aqui está a implementação em trechos.
+      1. MotorHeuristico — novo campo celulasVistas (junto aos outros conjuntos de memória):
+         java// casas já avistadas (chão visto), mesmo sem lá andar. Alimenta o cinza no mapa
+         // e a exploração por fronteira (BFS até ao desconhecido).
+         private final Set<String> celulasVistas = new HashSet<>();
+         2. MotorHeuristico — varrimento do campo de visão, chamado no início de decidirAcao (a seguir a memorizar muros/recursos/cofres, antes do historicoVisitas.merge):
+            java// varre o raio de visão e memoriza como "chão visto" as casas com linha de visão limpa
+            varrerCampoVisao(x, y);
+            E os métodos de suporte:
+            java// marca em celulasVistas todas as casas dentro do raio 4.5 cuja linha de visão
+            // até ao robô não é cortada por um muro conhecido (oclusão, §7).
+            private void varrerCampoVisao(int roboX, int roboY) {
+            int raio = 4; // 4.5 euclidiano: dx,dy até 4 (5º já excede em qualquer eixo)
+            for (int dx = -raio; dx <= raio; dx++) {
+            for (int dy = -raio; dy <= raio; dy++) {
+            if (dx * dx + dy * dy > 4.5 * 4.5) continue; // fora do círculo de raio 4.5
+            int cx = roboX + dx;
+            int cy = roboY + dy;
+            if (cx < 0 || cy < 0) continue;              // arena só tem coords positivas
+            if (temLinhaDeVisao(roboX, roboY, cx, cy)) {
+            celulasVistas.add(chave(cx, cy));         // inclui a própria casa do muro (é vista)
+            }
+            }
+            }
+            }
+      
+      // linha de visão limpa: nenhum muro conhecido ENTRE o robô e o alvo.
+      // A casa-alvo pode ser muro (vê-se a parede); só bloqueiam muros no caminho, não o destino.
+      private boolean temLinhaDeVisao(int x0, int y0, int x1, int y1) {
+      // amostragem por passos ao longo da reta (DDA simples)
+      int passos = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0));
+      if (passos == 0) return true; // a própria casa do robô
+      double dx = (x1 - x0) / (double) passos;
+      double dy = (y1 - y0) / (double) passos;
+      // percorre pontos intermédios (exclui origem; exclui destino para não auto-bloquear muros-alvo)
+      for (int i = 1; i < passos; i++) {
+      int px = (int) Math.round(x0 + dx * i);
+      int py = (int) Math.round(y0 + dy * i);
+      if (murosConhecidos.contains(chave(px, py))) return false; // muro corta a visão
+      }
+      return true;
+      }
+      Decisão (auditoria): o raio 4.5 euclidiano dá dx²+dy² ≤ 20.25, logo casas até 4 em cada eixo (diagonal (4,4) daria 32 > 20.25, excluída — coerente com "raio" circular). O temLinhaDeVisao só verifica pontos intermédios, por isso a casa do muro que bloqueia é ela própria visível, mas tudo atrás dela não — exatamente o que descreveste (a diagonal que vê o cofre só conta se nenhum muro estiver no caminho).
+      3. MotorHeuristico — getter só-de-leitura (junto aos outros):
+         javapublic Set<String> getCelulasVistas() { return Collections.unmodifiableSet(celulasVistas); }
+         4. MotorHeuristico — BFS de exploração até à fronteira (substitui o passoMaisFrio como fallback).
+            No decidirAcao, troca a última linha:
+            java// antes: return passoMaisFrio(validas, x, y);
+            String rumo = passoExploracao(x, y, validas);
+            return (rumo != null) ? rumo : passoMaisFrio(validas, x, y);
+            E adiciona o BFS. Ele procura a casa desconhecida (não em celulasVistas, não muro) alcançável mais próxima, atravessando casas já vistas e caminháveis, e devolve o primeiro passo dessa rota:
+            java// BFS: encontra a casa desconhecida alcançável mais próxima e devolve o 1º passo até lá.
+            // Atravessa casas vistas/caminháveis (não-muro); para na 1ª casa fora de celulasVistas.
+            // null se não há fronteira alcançável (mapa explorado ou cercado) -> cai no passoMaisFrio.
+            private String passoExploracao(int roboX, int roboY, List<String> validas) {
+            java.util.Deque<int[]> fila = new java.util.ArrayDeque<>();
+            Set<String> visitadosBFS = new HashSet<>();
+            // guarda, por cada casa alcançada, a PRIMEIRA ação que iniciou esse ramo
+            Map<String, String> primeiraAcao = new HashMap<>();
+      
+            // arranca o BFS pelos vizinhos válidos imediatos (respeitam colisão do turno)
+            for (String acao : validas) {
+            int[] d = destino(acao, roboX, roboY);
+            String k = chave(d[0], d[1]);
+            if (murosConhecidos.contains(k)) continue;
+            if (visitadosBFS.add(k)) {
+            fila.add(d);
+            primeiraAcao.put(k, acao);
+            }
+            }
+      
+            while (!fila.isEmpty()) {
+            int[] atual = fila.poll();
+            String kAtual = chave(atual[0], atual[1]);
+      
+                 // fronteira: casa que ainda não foi vista -> destino de exploração
+                 if (!celulasVistas.contains(kAtual)) {
+                     return primeiraAcao.get(kAtual);
+                 }
+      
+                 // expande para os 4 vizinhos caminháveis
+                 for (String acao : INTENCOES) {
+                     int[] viz = destino(acao, atual[0], atual[1]);
+                     if (viz[0] < 0 || viz[1] < 0) continue;
+                     String kViz = chave(viz[0], viz[1]);
+                     if (murosConhecidos.contains(kViz)) continue;
+                     if (visitadosBFS.add(kViz)) {
+                         fila.add(viz);
+                         primeiraAcao.put(kViz, primeiraAcao.get(kAtual)); // propaga a ação inicial do ramo
+                     }
+                 }
+            }
+            return null; // sem fronteira alcançável
+            }
+            Decisão (auditoria): custo uniforme (1 HP/passo) → BFS dá o caminho mais curto até ao desconhecido sem A*. O robô deixa de perseguir a casa "mais fria já andada" e passa a ir direto à fronteira do não-mapeado; casas que já viu estarem vazias não são revisitadas à toa. Se a fronteira só confinar com muros (borda do mapa), o BFS esgota esse ramo e procura fronteira noutra direção; se não houver nenhuma, cai no passoMaisFrio.
+         5. PainelMapaCalor — cinza para visto-não-andado, preto para desconhecido.
+            Precisa de receber celulasVistas. Adiciona ao construtor e ao campo:
+            javaprivate final Set<String> celulasVistas;
+            No construtor, novo parâmetro e atribuição. E desenha o cinza antes das casas andadas (camada de fundo do "visto"):
+            java// casas vistas mas não andadas: cinza (o desconhecido fica preto = fundo, sem desenho)
+            g2.setColor(new Color(70, 70, 70));
+            for (String k : celulasVistas) {
+            if (historicoVisitas.containsKey(k)) continue; // andada desenha-se a azul depois
+            int[] c = parseChave(k);
+            g2.fillRect(c[0] * lado, (linhas - 1 - c[1]) * lado, lado, lado);
+            }
+            Inclui também celulasVistas no cálculo de maxX/maxY (para a grelha crescer com o visto):
+            javafor (String k : celulasVistas) { int[] c = parseChave(k); maxX = Math.max(maxX, c[0]); maxY = Math.max(maxY, c[1]); }
+            6. Construção no AgenteExplorador — passar os novos conjuntos:
+               javaPainelMapaCalor painel = new PainelMapaCalor(
+               cerebro.getHistoricoVisitas(),
+               cerebro.getMurosConhecidos(),
+               cerebro.getRecursosConhecidos(),
+               cerebro.getCofresFalhados(),
+               cerebro.getCofresConhecidos(),
+               cerebro.getCelulasVistas()
+               );
+               Confirma o ponto da oclusão (muro-alvo conta como visto — sim/não) e se já declaraste cofresConhecidos no painel; com isso o conjunto fecha e compila.
 
 ---
 
 **PROMPT**
 
-
+      ao compilar e rodar o teste temos só 2 questoes pra deixar o robo bem funcional, aparecer o cofre no heatmap mesmo que nao tentado abrir aparecer ele como quadrado amarelo assim que tiver na memoria que exista um cofre ali; segundo ponto ele ainda ta tentando passar por parede pra pegar vida quanto ta com pouca ele fica presa em um loop pq a vida ta atras de um aparede e ele fica batendo e voltando pra ela
 
 **RESPOSTA**
 
-
+      de um aparede e ele fica batendo e voltando pra ela
+      
+      Instrução base recebida na íntegra. Autoverificação: não suponho chaves (uso getters já confirmados); não cruza Kaiky; SRP mantido; chat-only; português.
+      
+      Dois problemas, ambos com causa identificável no código que tens.
+      
+      1. Cofre amarelo no mapa assim que memorizado.
+      
+      O painel desenha cofresConhecidos, mas no ficheiro que colaste esse conjunto não está declarado nem recebido no construtor — só é usado no paintComponent. Falta a cadeia completa. Confirma que tens as três peças; se faltar alguma, é por isso que o cofre não aparece:
+      
+      No MotorHeuristico — campo, memorização e getter (já te passei; confirma que estão colados):
+      
+      java
+      private final Set<String> cofresConhecidos = new HashSet<>();
+      java
+      // no decidirAcao, junto à memorização de muros:
+      if (p.getCofres_no_mundo() != null) {
+      for (Cofre c : p.getCofres_no_mundo()) {
+      cofresConhecidos.add(chave(c.getX(), c.getY()));
+      }
+      }
+      java
+      public Set<String> getCofresConhecidos() { return Collections.unmodifiableSet(cofresConhecidos); }
+      No PainelMapaCalor — campo e parâmetro (falta no teu ficheiro):
+      
+      java
+      private final Set<String> cofresConhecidos;
+      
+      java
+      public PainelMapaCalor(Map<String, Integer> historicoVisitas,
+      Set<String> murosConhecidos,
+      Set<String> recursosConhecidos,
+      Set<String> cofresFalhados,
+      Set<String> cofresConhecidos) {
+      this.historicoVisitas = historicoVisitas;
+      this.murosConhecidos = murosConhecidos;
+      this.recursosConhecidos = recursosConhecidos;
+      this.cofresFalhados = cofresFalhados;
+      this.cofresConhecidos = cofresConhecidos;
+      setBackground(Color.BLACK);
+      }
+      Além disso, no teu paintComponent tens dois blocos a desenhar cofres: o novo (cofresConhecidos com amarelo/F) e um antigo (cofresFalhados só vermelho+F). O antigo é redundante — apaga o segundo bloco (o comentado "cofres falhados (vermelho) com F central"), senão desenhas o F duas vezes. O bloco de cofresConhecidos já trata o caso falhado.
+      
+      E na construção no AgenteExplorador, passa o novo conjunto:
+      
+      java
+      cerebro.getCofresConhecidos()
+      2. Loop a bater na parede para chegar à vida atrás dela.
+      
+      Aqui está a causa real, e não é o passoParaAlvo — esse já filtra murosConhecidos. O problema é o fluxo de decisão em decidirAcao:
+      
+      java
+      int[] alvo = escolherAlvo(p, x, y, hp);
+      if (alvo != null) {
+      String acao = passoParaAlvo(validas, x, y, alvo);
+      if (acao != null) return acao;   // <- se aproxima, vai
+      }
+      return passoMaisFrio(validas, x, y); // <- fallback
+      Com HP ≤ 50, escolherAlvo devolve o recurso atrás da parede. passoParaAlvo só devolve passos que reduzem a distância de Manhattan ao recurso — mas a parede está entre os dois. Resultado: passoParaAlvo aproxima o robô até à casa colada à parede; aí, o único passo que reduziria Manhattan é entrar na parede, que está em murosConhecidos → é descartado → passoParaAlvo devolve null → cai em passoMaisFrio, que o manda para a casa mais fria (a de onde veio). No turno seguinte é reatraído para a parede. Oscilação.
+      
+      O passoParaAlvo guloso por Manhattan não sabe contornar: só reduz distância em linha reta. Para o alvo atrás de muro, é preciso um caminho real que rodeie a parede — e isso é exatamente o BFS que já tens (passoExploracao), mas ele só procura casas desconhecidas, não um alvo específico.
+      
+      A correção: quando há um alvo (recurso/cofre), usar BFS até ao alvo (rota real contornando muros) em vez do guloso de Manhattan. Se o BFS não achar caminho (alvo isolado por muros), abandonar esse alvo em vez de insistir.
+      
+      Proponho um método novo, passoParaAlvoBFS, que substitui o passoParaAlvo na chamada. Preciso confirmar uma decisão antes de escrever, porque muda o comportamento: quando o recurso está inalcançável (cercado por muros conhecidos), o que fazes?
+      
+      (A) Ignora esse alvo e passa ao próximo mais próximo (outro recurso/cofre); se nenhum alcançável, explora (passoExploracao). Evita o loop e não desiste da sobrevivência se houver outra vida acessível.
+      (B) Ignora atração por completo nesse turno e explora, esperando que a exploração revele um caminho.
+      Recomendo A: com HP baixo, tentar o próximo recurso alcançável é o comportamento de sobrevivência correto. Mas há um risco a assumir: se o recurso está atrás de uma parede que o robô ainda não mapeou toda, ele pode não saber que é inalcançável e o BFS pode devolver um caminho que só existe parcialmente — o que é aceitável (ele avança pelo caminho conhecido e reavalia).
+      
+      Confirma A ou B e escrevo o passoParaAlvoBFS (BFS que devolve o 1º passo da rota até ao alvo, contornando murosConhecidos, ou null se inalcançável), mais o ajuste no decidirAcao para tratar o alvo inalcançável sem loop.
 
 ---
 
 **PROMPT**
 
-
+      sim temos que ir com a parte A porem tem que ter em mente a questão que o pode mapa pode acabr por estar 100% mapeado e ai o bfs quebra pra achar caminho a vida sem passar por parede
 
 **RESPOSTA**
-
-
+      
+      Instrução base recebida na íntegra. Autoverificação: não suponho chaves (uso getters confirmados); não cruza Kaiky (navegação pura); SRP mantido (BFS no cerebro); chat-only; português.
+      Opção A confirmada. O caso que levantas — mapa 100% mapeado e o BFS de exploração sem fronteira — já está tratado pelo passoExploracao que devolve null e cai no passoMaisFrio. O que falta é o BFS até ao alvo (recurso/cofre atrás de parede), que contorna muros de verdade. É isso que resolve o loop.
+      1. MotorHeuristico — BFS até um alvo concreto (contorna muros; devolve 1º passo ou null se inalcançável):
+         java// BFS até uma coordenada-alvo, contornando muros conhecidos. Devolve o 1º passo
+         // da rota mais curta, ou null se o alvo for inalcançável (cercado por muros).
+         // Custo uniforme (1 HP/passo) -> BFS dá o caminho mínimo sem A*.
+         private String passoParaAlvoBFS(int roboX, int roboY, int[] alvo, List<String> validas) {
+         String alvoK = chave(alvo[0], alvo[1]);
+         java.util.Deque<int[]> fila = new java.util.ArrayDeque<>();
+         Set<String> visitadosBFS = new HashSet<>();
+         Map<String, String> primeiraAcao = new HashMap<>();
+      
+         // arranca pelos vizinhos válidos imediatos (respeitam a colisão do turno)
+         for (String acao : validas) {
+         int[] d = destino(acao, roboX, roboY);
+         String k = chave(d[0], d[1]);
+         if (murosConhecidos.contains(k)) continue;
+         if (visitadosBFS.add(k)) {
+         fila.add(d);
+         primeiraAcao.put(k, acao);
+         }
+         }
+      
+         while (!fila.isEmpty()) {
+         int[] atual = fila.poll();
+         String kAtual = chave(atual[0], atual[1]);
+      
+              if (kAtual.equals(alvoK)) return primeiraAcao.get(kAtual); // chegou ao alvo
+      
+              for (String acao : INTENCOES) {
+                  int[] viz = destino(acao, atual[0], atual[1]);
+                  if (viz[0] < 0 || viz[1] < 0) continue;
+                  String kViz = chave(viz[0], viz[1]);
+                  if (murosConhecidos.contains(kViz)) continue;   // nunca atravessa muro
+                  if (visitadosBFS.add(kViz)) {
+                      fila.add(viz);
+                      primeiraAcao.put(kViz, primeiraAcao.get(kAtual)); // propaga ação inicial do ramo
+                  }
+              }
+         }
+         return null; // alvo inalcançável com o que se conhece do mapa
+         }
+         2. MotorHeuristico — reformular escolherAlvo para devolver uma lista ordenada (opção A: tentar o próximo alcançável).
+            O escolherAlvo atual devolve só o mais próximo. Para "se inalcançável, tenta o próximo", preciso da lista de alvos ordenada por distância. Substituo escolherAlvo por um método que devolve candidatos ordenados:
+            java// devolve os alvos candidatos ORDENADOS por distância de Manhattan (mais perto primeiro).
+            // Regra: HP > 50 só cofres; HP <= 50 recursos primeiro (sobrevivência), depois cofres.
+            private List<int[]> alvosOrdenados(Percecao p, int x, int y, int hp) {
+            List<int[]> candidatos = new ArrayList<>();
+            if (hp > 50) {
+            candidatos.addAll(cofresVisiveis(p));
+            } else {
+            candidatos.addAll(alvosRecursos(p)); // recursos memorizados + visíveis
+            candidatos.addAll(cofresVisiveis(p)); // cofres como alternativa
+            }
+            // ordena por Manhattan crescente a partir da posição atual
+            candidatos.sort((a, b) ->
+            Integer.compare(manhattan(x, y, a[0], a[1]), manhattan(x, y, b[0], b[1])));
+            return candidatos;
+            }
+         3. MotorHeuristico — novo fluxo em decidirAcao (substitui o bloco de decisão do alvo):
+            java// 2+3) tenta cada alvo por ordem de proximidade; usa BFS que contorna muros.
+            //      Se o mais próximo for inalcançável (atrás de parede), passa ao seguinte (opção A).
+            List<int[]> alvos = alvosOrdenados(p, x, y, hp);
+            for (int[] alvo : alvos) {
+            String acao = passoParaAlvoBFS(x, y, alvo, validas);
+            if (acao != null) return acao; // rota real encontrada (já contorna a parede)
+            }
+      
+      // nenhum alvo alcançável -> explora o não-mapeado; se tudo mapeado, cai no mais frio
+      String rumo = passoExploracao(x, y, validas);
+      return (rumo != null) ? rumo : passoMaisFrio(validas, x, y);
+      Isto elimina o passoParaAlvo guloso (Manhattan puro) da decisão — podes apagar o método passoParaAlvo antigo, já não é chamado. Confirma com Ctrl+F que não há outra chamada antes de remover.
+      Sobre o teu ponto — mapa 100% mapeado e o BFS "quebra":
+      Há duas situações distintas, ambas tratadas sem crash:
+      
+      Vida atrás de parede, mas com volta possível: passoParaAlvoBFS encontra o desvio e devolve o passo certo. Não há loop porque ele dá um caminho real, não um guloso que bate na parede.
+      Vida atrás de parede sem volta nenhuma (cercada) OU mapa todo explorado: passoParaAlvoBFS devolve null para esse alvo → tenta o próximo → se todos inalcançáveis, vai para passoExploracao → se não há fronteira (100% mapeado), null → passoMaisFrio garante sempre um passo válido. Nunca "quebra": o pior caso é o robô andar para a casa mais fria e continuar vivo.
+      
+      Decisão (auditoria): o loop de bater na parede vinha de decidir o passo por redução de Manhattan (que não sabe contornar). Trocar por BFS sobre murosConhecidos dá caminhos reais; a lista ordenada com fallback em cascata (próximo alvo → exploração → mais frio) garante que existe sempre uma ação de saída, mesmo com o alvo inacessível ou o mapa esgotado.
+      Um risco a teres em mente (não é bug, é limite do conhecimento): se a única volta até à vida passa por casas que o robô ainda não mapeou como muro, o BFS pode traçar uma rota que afinal tem parede não descoberta. Nesse caso ele avança até bater no filtrarColisoes do turno (que vê o muro real), esse muro entra em murosConhecidos, e no ciclo seguinte o BFS recalcula já a contar com ele. Converge sem loop infinito, mas pode gastar 1-2 HP a "descobrir" a parede — comportamento correto para um agente com visão limitada.
 
 ---
 
 **PROMPT**
 
-
+      ok no mapa de teste esta 100% funcional e otimizado o robo agora vamos seguir para a fase de batalha onde temos que programar o ataque e perceber inimigos a volta
 
 **RESPOSTA**
 
-
+      Instrução base recebida na íntegra. Autoverificação: (2) tenho de perguntar antes de codificar — a estrutura de outros_robots está por confirmar (§6 lista-a explicitamente como não verificada); (3) não cruza Kaiky (combate é navegação/heurística, meu domínio); (4) SRP mantido; (6) não hardcodeio chaves nem valores por confirmar; chat-only; português.
+      Antes de escrever qualquer linha de combate, preciso de fechar três confirmações no Swagger e uma decisão de física, senão suponho — e §6 proíbe.
+      1. Estrutura de outros_robots no /perceive (bloqueante).
+         Está marcada como não confirmada. Preciso da estrutura exata de um rival, via "Try it out" no /perceive numa sala com outro robô (usa a arena_batalha_global). Em concreto:
+      
+      O nome da chave é mesmo outros_robots? (§6 avisa que o enunciado é inconsistente; o teu DTO chama-se Percecao com getters nome-literal, logo seria getOutros_robots() — confirma.)
+      É uma lista de objetos, ou um mapa {id: {...}}? (O enunciado diz "chave outros_robots" e "mapa" num ponto — ambíguo.)
+      Que campos traz cada rival? Preciso de coordenadas (x,y?) e energia/HP (o nome do campo — energia? hp? vida?). Sem o HP do rival não há decisão Fight/Flight (§10 exige delta de energia).
+      
+      Cola o JSON cru de um rival. Sem isto não crio o DTO nem a desserialização.
+      2. Como se ataca — o /action aceita investida, ou há endpoint próprio?
+         §10 diz que a investida acontece ao mover para a coordenada (X,Y) do rival. Isso implica que o ataque não é uma ação nova — é um MOVER_* para cima do inimigo. Confirma no Swagger: o ataque é mesmo um movimento normal para a casa do rival (e o servidor deteta a colisão e aplica o dano), ou existe uma ação/endpoint dedicado (ex.: ATACAR)? Isto muda tudo — se for movimento, reutilizo a locomoção; se for ação dedicada, preciso do nome exato da string/endpoint.
+         3. Como detetar o modo de jogo (tipo_jogo).
+            §10 exige adaptar dinamicamente entre Missão e Batalha, mas §6 diz que tipo_jogo não aparece no /perceive (está na tua lista de não confirmados, e tu próprio registaste "como detetar tipo_jogo — não presente no /perceive"). Preciso de saber: o modo vem em algum campo do /perceive? Do /register? Ou não vem de todo pela API e tens de o passar por configuração (ex.: um campo no Configuracao)? Sem forma de detetar o modo, o combate não se pode ativar condicionalmente — e ligar combate em modo Missão faz o servidor devolver "Combate desativado!" (§10).
+         4. Decisão de física — limiar do Fight/Flight.
+            §10 dá as regras (investida: −1 HP a ti, +15 HP de dano ao inimigo) mas o critério de lutar vs fugir é decisão de design, não está fixado. Proponho, e confirma:
+      
+      Fugir se hpInimigo ≥ hpMeu (desvantagem ou empate → não arrisco; empate perco iniciativa).
+      Atacar se hpMeu > hpInimigo e o rival está a ≤ 2 blocos (§10 usa "≤ 2 blocos" como raio de decisão).
+      Ignorar rival fora de 2 blocos (continua a missão/exploração).
+      
+      Isto é um limiar simples; podes querer margem (ex.: só atacar se hpMeu > hpInimigo + 15, para cobrir o contra-ataque). Qual preferes — limiar simples ou com margem de segurança?
+      
+      Enquanto confirmas, deixo o desenho da arquitetura (sem código, para não supor) para validares:
+      
+      O combate é heurística → vive no MotorHeuristico (cerebro), não no AgenteExplorador. O orquestrador continua só a delegar.
+      Novo DTO Robo (ou o nome que o Swagger ditar) em org.example.modelo, com os campos que confirmares em (1).
+      A decisão Fight/Flight entra em decidirAcao com prioridade acima da atração a cofres/recursos — sobreviver a um ataque iminente vem antes de explorar. Ordem proposta: (a) reflexos na filaAcoesPlaneadas; (b) combate (fugir/atacar se rival ≤ 2 blocos); (c) atração recurso/cofre; (d) exploração BFS; (e) mais frio.
+      A fuga usa a filaAcoesPlaneadas (§8) — injeta 2-3 passos na direção oposta ao rival, para o robô descolar sem reprocessar tudo a cada turno.
+      Tudo isto só se ativa se o modo for Batalha (depende de (3)).
+      
+      Confirma 1, 2, 3 e a tua escolha em 4. Com a estrutura de outros_robots e a mecânica de ataque, escrevo o DTO + a deteção de inimigos + o Fight/Flight, em trechos.
 
 ---
 
 **PROMPT**
 
-
+      codgio do perceive de outros_robots é:   "outros_robots": {     "neymarobrabodaputaria": {       "x": 19,       "y": 12,       "z": 0.4,       "energia": 231,       "cor": "#ec4899"     }   }, que aparece quando ha um no campo de visão;
+      ataque por investida ao se mover para a coordenada que o robo esta lhe causa dano;
+      aparentemente nao ha como detectar o que sera feito sempre que compilar o projeto aparecer uma tela pequena menu para eu colocar o codigo da sala que iremos jogar id do robo e modo de jogo; por agora vamos ter algo simples como ese modelo de ataque e fuga que me deu de exemplo para teste
 
 **RESPOSTA**
 
-
+      Instrução base recebida na íntegra. Autoverificação: `outros_robots` agora confirmado (mapa `{id:{x,y,z,energia,cor}}`); ataque = movimento para a coordenada do rival (reutilizo locomoção, sem ação nova); modo vem do menu de config (não da API) — sem suposição; combate é heurística (meu domínio, não cruza Kaiky); SRP mantido; chat-only; português.
+      
+      Uma decisão de arquitetura sobre o modo, antes do código: como o `tipo_jogo` **não** vem da API e passa a vir do menu, o `AgenteExplorador` tem de informar o `cerebro` se o combate está ativo. Proponho passá-lo ao `MotorHeuristico` no construtor (ou um setter), como `boolean modoBatalha`. Assim o combate só liga em Batalha e evita o "Combate desativado!" (§10) em Missão. Confirma se o teu `Configuracao`/menu já devolve esse modo como boolean ou string — abaixo assumo um boolean `modoBatalha`; ajusta se for enum/string.
+      
+      **1. DTO do rival (`org.example.modelo`) — cria:**
+      
+      ```java
+      package org.example.modelo;
+      
+      // Robô rival devolvido no mapa outros_robots. Chave do mapa = id; valor = estes campos.
+      public class Robo {
+          private int x;
+          private int y;
+          private double z;
+          private int energia;
+          private String cor;
+      
+          public int getX() { return x; }
+          public int getY() { return y; }
+          public double getZ() { return z; }
+          public int getEnergia() { return energia; }
+          public String getCor() { return cor; }
+      }
+      ```
+      
+      **2. `Percecao` — campo e getter de `outros_robots` (mapa, não lista):**
+      
+      ```java
+      private java.util.Map<String, org.example.modelo.Robo> outros_robots;
+      public java.util.Map<String, org.example.modelo.Robo> getOutros_robots() { return outros_robots; }
+      ```
+      
+      Nota: Gson desserializa o objeto JSON num `Map<String,Robo>` — a chave do mapa fica com o id (ex.: `"neymarobrabodaputaria"`), o valor com os campos. Confirma que o teu DTO usa este tipo.
+      
+      **3. `MotorHeuristico` — flag de modo (construtor ou setter):**
+      
+      ```java
+      // combate só ativa em Batalha (o modo vem do menu de config, não da API)
+      private final boolean modoBatalha;
+      
+      public MotorHeuristico(boolean modoBatalha) {
+          this.modoBatalha = modoBatalha;
+      }
+      ```
+      
+      Se já tens construtor sem argumentos, adapta a criação no `AgenteExplorador`: `new MotorHeuristico(config.isModoBatalha())`. Diz-me o nome real do getter do modo se for diferente.
+      
+      **4. `MotorHeuristico` — deteção do rival mais próximo e decisão Fight/Flight:**
+      
+      ```java
+      // rival mais próximo dentro do raio de decisão (<= 2 blocos), ou null. So em Batalha.
+      private java.util.Map.Entry<String, Robo> rivalAmeaca(Percecao p, int x, int y) {
+          if (!modoBatalha || p.getOutros_robots() == null) return null;
+          java.util.Map.Entry<String, Robo> maisPerto = null;
+          int menor = Integer.MAX_VALUE;
+          for (java.util.Map.Entry<String, Robo> e : p.getOutros_robots().entrySet()) {
+              Robo r = e.getValue();
+              int d = manhattan(x, y, r.getX(), r.getY());
+              if (d <= 2 && d < menor) { menor = d; maisPerto = e; } // §10: raio de decisão 2 blocos
+          }
+          return maisPerto;
+      }
+      
+      // decide o passo de combate: atacar (mover para o rival) ou fugir (direção oposta).
+      // null se não há ameaça ou nenhuma ação de combate aplicável neste turno.
+      private String passoCombate(Percecao p, int x, int y, int hp, List<String> validas) {
+          java.util.Map.Entry<String, Robo> ameaca = rivalAmeaca(p, x, y);
+          if (ameaca == null) return null;
+      
+          Robo rival = ameaca.getValue();
+          int hpRival = rival.getEnergia();
+      
+          // limiar simples (§10): ataco só com vantagem estrita; caso contrário fujo.
+          if (hp > hpRival) {
+              // ATACAR: passo que reduz Manhattan até à casa do rival (a investida é o próprio movimento)
+              return passoParaAlvoBFS(x, y, new int[]{rival.getX(), rival.getY()}, validas);
+          } else {
+              // FUGIR: passo válido que MAXIMIZA a distância ao rival
+              return passoFuga(x, y, rival, validas);
+          }
+      }
+      
+      // escolhe a ação válida que mais afasta do rival (maior Manhattan resultante)
+      private String passoFuga(int x, int y, Robo rival, List<String> validas) {
+          String melhor = null;
+          int maiorDist = Integer.MIN_VALUE;
+          for (String acao : validas) {
+              int[] d = destino(acao, x, y);
+              if (murosConhecidos.contains(chave(d[0], d[1]))) continue; // não foge para muro
+              int dist = manhattan(d[0], d[1], rival.getX(), rival.getY());
+              if (dist > maiorDist) { maiorDist = dist; melhor = acao; }
+          }
+          return melhor;
+      }
+      ```
+      
+      **5. `MotorHeuristico` — inserir o combate no topo da prioridade de `decidirAcao`:**
+      
+      Logo a seguir a `filtrarColisoes` (depois de teres `validas`), **antes** da atração a alvos:
+      
+      ```java
+      // PRIORIDADE MÁXIMA em Batalha: reagir a rival próximo (fugir/atacar) antes de explorar
+      String combate = passoCombate(p, x, y, hp, validas);
+      if (combate != null) return combate;
+      ```
+      
+      Import a garantir no topo: `import org.example.modelo.Robo;`
+      
+      Decisões (auditoria):
+      - **Ataque = movimento**: confirmaste que a investida é mover para a casa do rival, logo reutilizo `passoParaAlvoBFS` (já contorna muros) — sem ação nova, sem duplicar lógica. Se o rival estiver a 1 bloco sem muro, o BFS devolve o passo direto para cima dele = investida.
+        - **Limiar simples** `hp > hpRival`: conforme pediste para teste. Risco assumido: não cobre o contra-ataque (podes ganhar a troca e ainda assim ficar em desvantagem no turno seguinte). Quando quiseres endurecer, troca por `hp > hpRival + 15` (margem = dano da investida).
+        - **Combate acima da atração**: sobreviver/eliminar vem antes de recursos/cofres/exploração. Em Missão (`modoBatalha=false`) todo este bloco é inerte — `rivalAmeaca` devolve `null` logo à entrada.
+        - **Fuga gulosa** (maximiza Manhattan num passo): simples e suficiente para teste. A versão robusta injeta 2-3 passos de fuga na `filaAcoesPlaneadas` (§8) para descolar sem reprocessar — fica para quando validares este modelo básico.
+      
+      **Pendente que não toquei (sinalizo, não suponho):**
+      - O **desenho dos rivais** no `PainelMapaCalor` (ex.: marcador vermelho na casa do rival) — queres? Se sim, o painel precisa de receber `getOutros_robots()` por chamada (muda a cada turno, não é memória persistente como muros). Confirma e passo o trecho.
+        - A **fila de fuga** (`filaAcoesPlaneadas`) da §8 ainda não está implementada no `AgenteExplorador`. O `passoFuga` atual dá 1 passo/turno; para fuga sustentada convém a fila. Digo-te como quando quiseres.
+        - O **timer do modo Batalha** (§7: 5 min vs 10 min — por confirmar) não afeta este código, mas confirma-o antes de qualquer lógica dependente de tempo.
+      
+      Confirma o tipo do modo no `Configuracao` (boolean/enum) e se queres os rivais desenhados no painel.
 
 ---
 
 **PROMPT**
 
-
+      ao colocar o return do combate da erro que requer o tipo List
+      <java.lang.String>; sim vamos desenhar o rival no mapa, para a fuga de algumas ideias de como poderiamos fazer uma fuga bem definida e funcional; sobre o hp vamos mudar para quando tiver menos de 200 vida e tiver um hp no campo de visao ir la coletalo caso nao tenho hp do campo de visao continua a andar, e se a vida estivar abaixo de 80 para tudo pra ir buscar mais energia no mapa tanto pelos cofres como pelos pontos de hp pois os cofres dão vida tambem, sobre o timer são 10 minutos no teste de batalha pode ser que no exame final seja um tempo diferente, outra coisa que ja arrumei em todo codigo que mandou mais precisa ter salvo para proximos é que a classe robo se chama OutroRobot
 
 **RESPOSTA**
 
-
+      Instrução base recebida na íntegra. Autoverificação: sem suposição de chaves (`outros_robots`/`energia` confirmados; classe = `OutroRobot`, registado); combate é heurística (meu domínio); SRP mantido; timer batalha = 10 min no teste (exame pode diferir — não hardcodeio dependências de tempo); chat-only; português.
+      
+      **Erro do `return combate` ("requer List<String>"):** o método onde inseriste o bloco de combate devolve `List<String>`, não `String`. Pelo erro, colaste o combate no `filtrarColisoes` (que devolve `List<String>`) em vez do `decidirAcao` (que devolve `String`). O bloco de combate tem de estar dentro do `decidirAcao`, a seguir à linha `List<String> validas = filtrarColisoes(p);`. Confirma que está lá e não no `filtrarColisoes`. Se estiver no sítio certo e o erro persistir, cola-me a assinatura do método onde o puseste.
+      
+      ---
+      
+      **1. Nova regra de HP (substitui o limiar único de 50).**
+      
+      Três faixas, conforme definiste: HP < 200 → apanha HP se estiver visível, senão continua; HP < 80 → larga tudo e caça HP (recursos **e** cofres, que também curam). Ajusto `alvosOrdenados`:
+      
+      ```java
+      // alvos por prioridade de HP:
+      // < 80  -> emergência: recursos + cofres (ambos curam), tudo o que for alcançável
+      // < 200 -> oportunista: só recursos SE visíveis/memorizados; cofres continuam a atrair
+      // = 250 (cheio) -> só cofres (missão)
+      private List<int[]> alvosOrdenados(Percecao p, int x, int y, int hp) {
+          List<int[]> candidatos = new ArrayList<>();
+      
+          if (hp < 80) {
+              // emergência de energia: recursos primeiro (curam rápido), depois cofres
+              candidatos.addAll(alvosRecursos(p));
+              candidatos.addAll(cofresVisiveis(p));
+          } else if (hp < 200) {
+              // oportunista: apanha HP no caminho se houver, mas cofres mantêm-se como objetivo
+              candidatos.addAll(alvosRecursos(p));
+              candidatos.addAll(cofresVisiveis(p));
+          } else {
+              // HP no teto: foco em cofres (missão)
+              candidatos.addAll(cofresVisiveis(p));
+          }
+      
+          candidatos.sort((a, b) ->
+              Integer.compare(manhattan(x, y, a[0], a[1]), manhattan(x, y, b[0], b[1])));
+          return candidatos;
+      }
+      ```
+      
+      Uma nota para auditoria e uma decisão que preciso que confirmes: com HP < 80 e HP < 200 a lista de candidatos é **idêntica** (recursos + cofres). A diferença que descreveste é comportamental — em `< 200` o recurso só atrai "se estiver no campo de visão / memorizado" (que é exatamente o que `alvosRecursos` já devolve), e em `< 80` deve **abandonar a exploração** para caçar energia. No código acima ambas ordenam igual; a distinção real aparece **quando não há alvo**: em emergência (`< 80`) faz sentido continuar a explorar à procura de energia (o BFS de exploração já faz isso), mas o que **não** queres é ele parar a explorar cofres por estar cheio.
+      
+      Pergunta: em `< 80`, se **não** houver nenhum recurso/cofre conhecido no mapa todo, o robô deve **explorar** para os encontrar (comportamento atual via `passoExploracao`), certo? Assumo que sim — a exploração já cobre "procurar energia no mapa". Confirma.
+      
+      ---
+      
+      **2. Correção do `passoCombate` (tipo de retorno).**
+      
+      Confirma que `passoCombate` devolve `String` (não `List<String>`). A assinatura correta:
+      
+      ```java
+      private String passoCombate(Percecao p, int x, int y, int hp, List<String> validas) {
+      ```
+      
+      E a chamada no `decidirAcao` (dentro do método que devolve `String`):
+      
+      ```java
+      List<String> validas = filtrarColisoes(p);
+      if (validas.isEmpty()) return null;
+      
+      // combate tem prioridade máxima em Batalha
+      String combate = passoCombate(p, x, y, hp, validas);
+      if (combate != null) return combate;
+      
+      // ... resto (alvos, exploração, mais frio)
+      ```
+      
+      ---
+      
+      **3. Fuga bem definida — proponho três níveis, escolhe.**
+      
+      A fuga atual (1 passo que maximiza Manhattan) é reativa e fraca: o robô pode fugir para um beco. Ideias, da mais simples à mais robusta:
+      
+      - **Nível 1 — Fuga por fila de reflexos (`filaAcoesPlaneadas`, §8).** Ao detetar ameaça, injeta 2-3 passos na direção oposta ao rival de uma vez. Nos turnos seguintes o robô despacha a fila sem reprocessar — descola depressa. Simples, cumpre a §8, mas "cego": não verifica se a rota da fuga tem parede/beco.
+      
+        - **Nível 2 — Fuga para a fronteira mais distante do rival (BFS).** Em vez de maximizar Manhattan num passo, BFS que procura a casa **alcançável** (contornando muros) que maximiza a distância ao rival dentro de N passos, e segue essa rota. Não foge para becos porque só considera casas com saída. Reutiliza a infraestrutura BFS que já tens.
+      
+        - **Nível 3 — Fuga com destino seguro (BFS até recurso/borda).** Combina fuga + sobrevivência: foge **em direção a um recurso de HP conhecido** (curas enquanto foges) ou à zona não-mapeada mais longe do rival. Tática, mas mais complexa.
+      
+      Recomendo **Nível 2** como base sólida agora, com a `filaAcoesPlaneadas` do Nível 1 por cima para reação imediata (o primeiro turno injeta fila; enquanto a fila corre, o BFS recalcula se o rival persegue). O Nível 3 fica para afinação.
+      
+      Decisão que preciso: qual nível queres que implemente? E para o Nível 2, quantos passos de "horizonte" (N) devo usar na avaliação da fuga — proponho N=4 (igual ao raio de visão, para fugir até ao limite do que conhece). Confirma nível + horizonte.
+      
+      ---
+      
+      **4. Desenhar o rival no mapa.**
+      
+      O rival muda de posição a cada turno — **não** é memória persistente (ao contrário de muros). Logo o painel recebe a posição atual por chamada, não um `Set` acumulado. Passo os rivais em cada `atualizar(...)`.
+      
+      `PainelMapaCalor` — novo campo e parâmetro no `atualizar`:
+      
+      ```java
+      // posições dos rivais NESTE turno (transitório; não é memória persistente)
+      private java.util.Map<String, OutroRobot> rivais;
+      ```
+      
+      Ajusta a assinatura de `atualizar` (a posição do robô já lá está) para receber os rivais:
+      
+      ```java
+      public void atualizar(int x, int y, java.util.Map<String, OutroRobot> rivais) {
+          this.xRobo = x;
+          this.yRobo = y;
+          this.rivais = rivais;
+          repaint();
+      }
+      ```
+      
+      E desenha-os **por cima** de tudo menos do robô (para o rival ser sempre visível), a seguir ao bloco dos cofres e antes do robô:
+      
+      ```java
+      // rivais (magenta) — posição do turno atual; sobrepõe-se ao mapa
+      if (rivais != null) {
+          g2.setColor(new Color(236, 72, 153)); // tom distinto do ciano do robô
+          for (OutroRobot r : rivais.values()) {
+              int px = r.getX() * lado, py = (linhas - 1 - r.getY()) * lado;
+              g2.fillRect(px, py, lado, lado);
+          }
+      }
+      ```
+      
+      Import no painel: `import org.example.modelo.OutroRobot;`
+      
+      Chamada no `AgenteExplorador` (fim do ciclo):
+      
+      ```java
+      painel.atualizar(
+          p.getO_meu_estado().getX(),
+          p.getO_meu_estado().getY(),
+          p.getOutros_robots()
+      );
+      ```
+      
+      Decisão (auditoria): rivais são estado transitório (posição muda todo o turno), por isso não entram na memória persistente do `cerebro` nem no cálculo de `maxX/maxY` da grelha — desenho-os só na posição do turno. Se saírem do campo de visão, `getOutros_robots()` deixa de os incluir e desaparecem do mapa, que é o correto (o robô já não os vê).
+      
+      Confirma: (a) o combate está no `decidirAcao` e não no `filtrarColisoes`; (b) em HP < 80 sem alvos conhecidos, explorar para procurar energia — ok?; (c) nível de fuga (1/2/3) e horizonte N. Com isto fecho o combate e a fuga.
 
 ---
 
 **PROMPT**
 
-
+      pode ficar com a opção 2 de fuga outra questão que se etiver a batalhar com o robo e ao recber o perceive o robo inimigo ter menos vida que o nosso não podemos dar fuga temos que garantir o abate do robo
 
 **RESPOSTA**
 
-
+      Instrução base recebida e integrada. Autoverificação: sem suposição de chaves (`outros_robots`/`energia`/`OutroRobot` confirmados); combate é heurística (meu domínio, não cruza Kaiky); SRP mantido (BFS de fuga no `cerebro`); horizonte de fuga sem hardcode de regra do servidor; chat-only; português.
+      
+      Confirmado: fuga Nível 2 (BFS até à casa alcançável mais distante do rival) e, quando o rival tem **menos** HP que o nosso, nunca fugir — perseguir até ao abate. Isto já está coberto pela lógica `hp > hpRival → atacar` do `passoCombate`, mas há um ponto que fortaleço: a perseguição tem de ser **sustentada** até o rival morrer ou sair de alcance, não só um passo.
+      
+      Antes do código, **uma** decisão que preciso que confirmes (§2.2 — não suponho), porque muda o comportamento do abate:
+      
+      O rival move-se a cada turno. Ao persegui-lo, ele foge, e o raio de decisão de 2 blocos pode fazer o robô **desistir** assim que o rival passa dos 2 blocos — abortando o abate a meio. Duas hipóteses:
+      
+      - **(A)** Mantém o raio de 2 blocos para *iniciar* combate, mas uma vez em modo perseguição, persegue enquanto o rival estiver **visível** (dentro do raio 4.5 do radar), mesmo que passe dos 2 blocos. Só desiste quando o rival sai do campo de visão. Garante o abate que pediste, mas pode arrastar o robô para longe da missão.
+        - **(B)** Persegue só dentro dos 2 blocos; se o rival escapa além disso, volta à missão. Mais conservador, mas pode "deixar fugir" um rival fraco.
+      
+      Pediste "garantir o abate" → recomendo **A**. Confirma A ou B.
+      
+      Assumindo **A**, aqui está.
+      
+      **1. `MotorHeuristico` — `rivalAmeaca` passa a distinguir "atacável" (visível) de "iniciar combate" (≤2):**
+      
+      ```java
+      // rival mais próximo VISÍVEL (dentro do raio de radar). Usado para perseguição sustentada.
+      // Devolve null fora de Batalha ou sem rivais.
+      private java.util.Map.Entry<String, OutroRobot> rivalVisivel(Percecao p, int x, int y) {
+          if (!modoBatalha || p.getOutros_robots() == null) return null;
+          java.util.Map.Entry<String, OutroRobot> maisPerto = null;
+          int menor = Integer.MAX_VALUE;
+          for (java.util.Map.Entry<String, OutroRobot> e : p.getOutros_robots().entrySet()) {
+              OutroRobot r = e.getValue();
+              int d = manhattan(x, y, r.getX(), r.getY());
+              if (d < menor) { menor = d; maisPerto = e; }
+          }
+          return maisPerto; // o servidor só devolve rivais dentro do radar -> já estão visíveis
+      }
+      ```
+      
+      **2. `MotorHeuristico` — `passoCombate` reescrito (abate garantido vs fuga Nível 2):**
+      
+      ```java
+      // decisão de combate (§10). Prioridade máxima em Batalha.
+      // - rival com MENOS HP que o nosso e visível -> perseguir/atacar até ao abate (nunca foge).
+      // - rival com HP >= o nosso e a <= 2 blocos -> fugir (Nível 2, BFS).
+      // - caso contrário -> null (segue a missão).
+      private String passoCombate(Percecao p, int x, int y, int hp, List<String> validas) {
+          java.util.Map.Entry<String, OutroRobot> alvo = rivalVisivel(p, x, y);
+          if (alvo == null) return null;
+      
+          OutroRobot rival = alvo.getValue();
+          int hpRival = rival.getEnergia();
+          int dist = manhattan(x, y, rival.getX(), rival.getY());
+      
+          if (hp > hpRival) {
+              // ABATE: enquanto visível e mais fraco, persegue com BFS (contorna muros).
+              // A investida é o próprio movimento para a casa do rival.
+              String passo = passoParaAlvoBFS(x, y, new int[]{rival.getX(), rival.getY()}, validas);
+              if (passo != null) return passo;
+              // rival visível mas inalcançável agora (muro entre ambos) -> não desiste, aproxima-se pelo mapa
+              return passoExploracao(x, y, validas);
+          }
+      
+          // rival mais forte ou igual: só foge se estiver perto o suficiente para ser ameaça
+          if (dist <= 2) {
+              return passoFugaBFS(x, y, rival, validas);
+          }
+          return null; // rival forte mas longe: ignora, segue missão
+      }
+      ```
+      
+      **3. `MotorHeuristico` — fuga Nível 2 (BFS até à casa alcançável mais distante do rival):**
+      
+      ```java
+      // Fuga Nível 2: BFS a partir da posição atual, dentro de um horizonte de passos,
+      // escolhe a casa alcançável (contornando muros) que MAXIMIZA a distância ao rival
+      // e devolve o 1º passo dessa rota. Evita becos porque só considera casas com caminho real.
+      private String passoFugaBFS(int roboX, int roboY, OutroRobot rival, List<String> validas) {
+          final int HORIZONTE = 4; // igual ao raio de visão: foge até ao limite do que conhece
+      
+          java.util.Deque<int[]> fila = new java.util.ArrayDeque<>(); // {x, y, profundidade}
+          Set<String> visitadosBFS = new HashSet<>();
+          Map<String, String> primeiraAcao = new HashMap<>();
+      
+          String melhorAcao = null;
+          int melhorDistRival = -1;
+      
+          for (String acao : validas) {
+              int[] d = destino(acao, roboX, roboY);
+              String k = chave(d[0], d[1]);
+              if (murosConhecidos.contains(k)) continue;
+              if (visitadosBFS.add(k)) {
+                  fila.add(new int[]{d[0], d[1], 1});
+                  primeiraAcao.put(k, acao);
+              }
+          }
+      
+          while (!fila.isEmpty()) {
+              int[] atual = fila.poll();
+              String kAtual = chave(atual[0], atual[1]);
+              int prof = atual[2];
+      
+              // avalia esta casa como candidato de fuga (mais longe do rival = melhor)
+              int distRival = manhattan(atual[0], atual[1], rival.getX(), rival.getY());
+              if (distRival > melhorDistRival) {
+                  melhorDistRival = distRival;
+                  melhorAcao = primeiraAcao.get(kAtual);
+              }
+      
+              if (prof >= HORIZONTE) continue; // não expande além do horizonte
+      
+              for (String acao : INTENCOES) {
+                  int[] viz = destino(acao, atual[0], atual[1]);
+                  if (viz[0] < 0 || viz[1] < 0) continue;
+                  String kViz = chave(viz[0], viz[1]);
+                  if (murosConhecidos.contains(kViz)) continue;
+                  if (visitadosBFS.add(kViz)) {
+                      fila.add(new int[]{viz[0], viz[1], prof + 1});
+                      primeiraAcao.put(kViz, primeiraAcao.get(kAtual));
+                  }
+              }
+          }
+          return melhorAcao; // null só se cercado; o decidirAcao trata o fallback
+      }
+      ```
+      
+      **4. Chamada no `decidirAcao` (inalterada na posição — prioridade máxima):**
+      
+      ```java
+      List<String> validas = filtrarColisoes(p);
+      if (validas.isEmpty()) return null;
+      
+      // combate tem prioridade máxima em Batalha (abate ou fuga)
+      String combate = passoCombate(p, x, y, hp, validas);
+      if (combate != null) return combate;
+      
+      // ... alvos de HP, exploração, mais frio (resto igual)
+      ```
+      
+      Podes **apagar** o `passoFuga` guloso antigo e o `rivalAmeaca` antigo — foram substituídos por `passoFugaBFS` e `rivalVisivel`. Confirma com Ctrl+F que não há outras chamadas antes de remover.
+      
+      Decisões (auditoria):
+      - **Abate garantido**: `hp > hpRival` persegue enquanto o rival for **visível** (não só ≤2 blocos), com BFS que contorna muros. Se houver muro entre ambos, não desiste — aproxima-se via `passoExploracao` para ganhar linha de perseguição. Cumpre o teu "garantir o abate".
+        - **Fuga só quando faz sentido**: rival mais forte **e** a ≤2 blocos → foge; mais forte mas longe → ignora (não desperdiça HP a fugir de quem não o ameaça já).
+        - **Fuga Nível 2 sem becos**: BFS com horizonte 4 avalia todas as casas alcançáveis e escolhe a mais distante do rival com caminho real — não foge para dentro de uma parede sem saída, ao contrário da versão gulosa.
+        - **Horizonte = 4**: alinhado ao raio de visão; foge até ao limite do que o robô conhece. Não é regra do servidor, é parâmetro de design (ajustável).
+      
+      Um risco a teres presente (limite de conhecimento, não bug): a fuga maximiza distância pelo mapa **conhecido**; se a casa mais distante levar a uma zona não-mapeada que afinal é um beco, o robô descobre a parede ao chegar (entra em `murosConhecidos`) e recalcula no turno seguinte. Converge, mas pode perder 1 HP a descobrir o beco.
+      
+      Pendente que **não** toquei (sinalizo): a fuga sustentada via `filaAcoesPlaneadas` (§8) — o `passoFugaBFS` recalcula a cada turno, o que é mais reativo mas gasta mais processamento. Se quiseres a fila de reflexos (injetar 2-3 passos e despachar sem reprocessar), digo-te como integrar no `AgenteExplorador`. Confirma A/B da perseguição e se queres a fila.
 
 ---
 
 **PROMPT**
-
 
 
 **RESPOSTA**

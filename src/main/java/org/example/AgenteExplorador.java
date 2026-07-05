@@ -37,7 +37,9 @@ public class AgenteExplorador {
                 cerebro.getHistoricoVisitas(),
                 cerebro.getMurosConhecidos(),
                 cerebro.getRecursosConhecidos(),
-                cerebro.getCofresFalhados()
+                cerebro.getCofresFalhados(),
+                cerebro.getCofresConhecidos(),
+                cerebro.getCelulasVistas()
         );
 
         JFrame janela = new JFrame("Mapa de Calor - NeymarRAG");
@@ -89,8 +91,11 @@ public class AgenteExplorador {
                 }
 
                 // no fim de cada ciclo Sense-Think-Act:
-                painel.atualizar(p.getO_meu_estado().getX(), p.getO_meu_estado().getY());
-
+                painel.atualizar(
+                        p.getO_meu_estado().getX(),
+                        p.getO_meu_estado().getY(),
+                        p.getOutros_robots()
+                );
             } catch (Exception e) {
                 // Resiliência: timeouts/micro-cortes não derrubam o agente.
                 System.out.println("Falha no turno (a retomar): " + e.getMessage());

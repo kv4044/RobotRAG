@@ -21,4 +21,5 @@ public class Percecao {
     public java.util.List<org.example.modelo.Cofre> getCofres_no_mundo() { return cofres_no_mundo; }public boolean isGame_started() { return game_started; }
     public boolean isGame_over() { return game_over; }
     public String getVencedor() { return vencedor; }
+    
 }
