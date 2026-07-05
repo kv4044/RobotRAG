@@ -2572,61 +2572,995 @@ Confirma os pontos 1 e 2 e responde às duas decisões, e escrevo o código.
 
 **PROMPT**
 
-
+      alguns pormenores que precisam ser alterados: a memoria tera que ser fixa vamos mudas o que foi combinado mesmo que existe a possibilidade do item ter desaparecido, e tambem no heatmap o item tem que ficar fixo no mapa pois quando sai do campo de visao mudo o icone pra o padrao de caminhio, tambem precisa-se aparecer as paredes no mapa tanto as que limitam o mapa quanto as obstaculo que ficam no meio dele envie o codigo do heatmpa atualizado; e sobre os muros o json no swagger é :     "objetos_fixos": [{
+      "id": "parede_34",
+      "type": "cubo",
+      "model": "cubo.glb",
+      "x": 7,
+      "y": 4,
+      "z": 0.5
+      }]
 
 **RESPOSTA**
 
-
+       Duas coisas a fechar antes do código, uma é decisão que altera o combinado (não suponho a extensão) e outra é confirmação de getter (Secção 6).
+      
+      **1. "Memória fixa" — preciso da extensão exata, porque contradiz o que estava combinado.** Antes aprovaste descartar o recurso memorizado ao chegar e já não existir. Agora dizes memória fixa mesmo que o item possa ter desaparecido. Isto tem uma consequência que quero que confirmes conscientemente: se o recurso já foi coletado (some da sala) mas fica fixo na memória, o robô com HP ≤ 50 pode ser atraído para uma coordenada **vazia** e ficar lá preso (chega, não há recurso, mas continua memorizado → volta a ser atraído → loop).
+      
+      Como queres resolver isto? Opções:
+      - **(A)** Memória de atração fixa, mas ao **chegar** à coordenada e o recurso não estar visível, marca-a como "esgotada" só para efeitos de **atração** (deixa de puxar), mantendo-a **no desenho** do mapa. Separa o "atrai" do "mostra".
+        - **(B)** Fixa para tudo, incluindo atração — e aceitas o risco do loop em coordenada vazia (não recomendo).
+      
+      O teu texto sugere que a fixação é sobretudo **visual** ("no heatmap o item tem que ficar fixo... quando sai do campo de visão mudo o ícone pra o padrão"). Isso encaixa na **(A)**: o item fica desenhado no mapa mesmo fora do campo de visão, mas a lógica de atração não persegue um recurso que já não existe. Confirmas (A)?
+      
+      **Nota de fronteira com o combinado:** esta mudança afeta a função `alvosRecursos`/limpeza que codifiquei antes. Não a reescrevo já porque depende da tua resposta A/B. O código do heatmap abaixo trata só da **camada visual fixa**, que é o que pediste explicitamente e não depende dessa decisão.
+      
+      **2. Getter dos muros.** Pela tua convenção de nome-literal, infiro `getObjetos_fixos()` no `Percecao`, e um DTO `ObjetoFixo` com `getX()/getY()`. **Confirma** o nome do getter da lista e que crio o DTO `ObjetoFixo` (à semelhança de `Recurso`/`Cofre`). Sem isso não desenho os muros nem os passo ao painel.
+      
+      **DTO dos muros (pacote `org.example.modelo`) — cria se confirmares:**
+      
+      ```java
+      package org.example.modelo;
+      
+      // Muro/obstáculo devolvido em objetos_fixos (limites do mapa e obstáculos internos)
+      public class ObjetoFixo {
+          private String id;
+          private String type;
+          private String model;
+          private int x;
+          private int y;
+          private double z;
+      
+          public String getId() { return id; }
+          public String getType() { return type; }
+          public String getModel() { return model; }
+          public int getX() { return x; }
+          public int getY() { return y; }
+          public double getZ() { return z; }
+      }
+      ```
+      
+      **`PainelMapaCalor` atualizado** — camada visual **fixa** para recursos/cofres/muros (acumula ao longo do jogo, não desaparece ao sair do campo de visão) + muros desenhados. O painel mantém memória própria de desenho (`Set` de coordenadas já vistas), coerente com "fica fixo no mapa":
+      
+      ```java
+      package org.example.ui;
+      
+      import javax.swing.JPanel;
+      import java.awt.Color;
+      import java.awt.Font;
+      import java.awt.Graphics;
+      import java.awt.Graphics2D;
+      import java.util.HashMap;
+      import java.util.HashSet;
+      import java.util.List;
+      import java.util.Map;
+      import java.util.Set;
+      import org.example.modelo.Recurso;
+      import org.example.modelo.Cofre;
+      import org.example.modelo.ObjetoFixo;
+      
+      // Só desenha (SRP). Mantém memória visual FIXA: uma vez visto, o item permanece
+      // no mapa mesmo depois de sair do campo de visão do robô.
+      public class PainelMapaCalor extends JPanel {
+      
+          private final Map<String, Integer> historicoVisitas;
+          private int xRobo = 0;
+          private int yRobo = 0;
+      
+          // memória visual persistente (coordenadas "x,y" já avistadas ao longo do jogo)
+          private final Set<String> murosVistos = new HashSet<>();
+          private final Set<String> cofresVistos = new HashSet<>();
+          // recurso guarda-se em Map para saber se, quando revisto, estava coletado
+          private final Map<String, Boolean> recursosVistos = new HashMap<>();
+      
+          private static final Color COR_ANDADA = new Color(60, 90, 160);
+          private static final Color COR_MURO   = new Color(150, 90, 30);
+      
+          public PainelMapaCalor(Map<String, Integer> historicoVisitas) {
+              this.historicoVisitas = historicoVisitas;
+              setBackground(Color.BLACK);
+          }
+      
+          // acumula o que é visível neste turno na memória visual persistente
+          public void atualizar(int x, int y, List<Recurso> recursos,
+                                List<Cofre> cofres, List<ObjetoFixo> muros) {
+              this.xRobo = x;
+              this.yRobo = y;
+              if (muros != null)   for (ObjetoFixo m : muros)   murosVistos.add(chave(m.getX(), m.getY()));
+              if (cofres != null)  for (Cofre c : cofres)       cofresVistos.add(chave(c.getX(), c.getY()));
+              if (recursos != null) for (Recurso r : recursos)  recursosVistos.put(chave(r.getX(), r.getY()), r.isColetado());
+              repaint();
+          }
+      
+          @Override
+          protected void paintComponent(Graphics g) {
+              super.paintComponent(g);
+              Graphics2D g2 = (Graphics2D) g;
+      
+              // 1) dimensões dinâmicas: inclui tudo o que já foi visto
+              int maxX = xRobo, maxY = yRobo;
+              for (String k : historicoVisitas.keySet()) { int[] c = parseChave(k); maxX = Math.max(maxX, c[0]); maxY = Math.max(maxY, c[1]); }
+              for (String k : murosVistos)   { int[] c = parseChave(k); maxX = Math.max(maxX, c[0]); maxY = Math.max(maxY, c[1]); }
+              for (String k : cofresVistos)  { int[] c = parseChave(k); maxX = Math.max(maxX, c[0]); maxY = Math.max(maxY, c[1]); }
+              for (String k : recursosVistos.keySet()) { int[] c = parseChave(k); maxX = Math.max(maxX, c[0]); maxY = Math.max(maxY, c[1]); }
+      
+              int colunas = maxX + 1, linhas = maxY + 1;
+              int lado = Math.min(getWidth() / colunas, getHeight() / linhas);
+              if (lado < 1) lado = 1;
+      
+              // 2) casas andadas: cor única + número da contagem
+              g2.setFont(new Font("Monospaced", Font.BOLD, Math.max(8, lado / 3)));
+              for (Map.Entry<String, Integer> e : historicoVisitas.entrySet()) {
+                  int[] c = parseChave(e.getKey());
+                  int px = c[0] * lado, py = (linhas - 1 - c[1]) * lado;
+                  g2.setColor(COR_ANDADA);
+                  g2.fillRect(px, py, lado, lado);
+                  g2.setColor(Color.WHITE);
+                  String txt = String.valueOf(e.getValue());
+                  int tw = g2.getFontMetrics().stringWidth(txt);
+                  int th = g2.getFontMetrics().getAscent();
+                  g2.drawString(txt, px + (lado - tw) / 2, py + (lado + th) / 2);
+              }
+      
+              // 3) muros (castanho) — limites e obstáculos internos, fixos
+              g2.setColor(COR_MURO);
+              for (String k : murosVistos) {
+                  int[] c = parseChave(k);
+                  g2.fillRect(c[0] * lado, (linhas - 1 - c[1]) * lado, lado, lado);
+              }
+      
+              // 4) recursos (verde) — fixos; não desenha os que se sabe coletados
+              g2.setColor(Color.GREEN);
+              for (Map.Entry<String, Boolean> e : recursosVistos.entrySet()) {
+                  if (Boolean.TRUE.equals(e.getValue())) continue; // coletado -> não mostra
+                  int[] c = parseChave(e.getKey());
+                  g2.fillRect(c[0] * lado, (linhas - 1 - c[1]) * lado, lado, lado);
+              }
+      
+              // 5) cofres (amarelo) — fixos
+              g2.setColor(Color.YELLOW);
+              for (String k : cofresVistos) {
+                  int[] c = parseChave(k);
+                  g2.fillRect(c[0] * lado, (linhas - 1 - c[1]) * lado, lado, lado);
+              }
+      
+              // 6) linhas da grelha
+              g2.setColor(new Color(40, 40, 40));
+              for (int i = 0; i <= colunas; i++) g2.drawLine(i * lado, 0, i * lado, linhas * lado);
+              for (int j = 0; j <= linhas; j++) g2.drawLine(0, j * lado, colunas * lado, j * lado);
+      
+              // 7) robô (ciano) por cima
+              g2.setColor(Color.CYAN);
+              g2.fillOval(xRobo * lado, (linhas - 1 - yRobo) * lado, lado, lado);
+          }
+      
+          private int[] parseChave(String chave) {
+              String[] partes = chave.split(",");
+              return new int[]{ Integer.parseInt(partes[0]), Integer.parseInt(partes[1]) };
+          }
+      }
+      ```
+      
+      **Chamada no `AgenteExplorador`** (nova assinatura com muros):
+      
+      ```java
+      painel.atualizar(
+          p.getO_meu_estado().getX(),
+          p.getO_meu_estado().getY(),
+          p.getRecursos_no_mundo(),
+          p.getCofres_no_mundo(),
+          p.getObjetos_fixos()   // confirma este getter
+      );
+      ```
+      
+      Decisões (auditoria):
+      - **Memória visual no painel** (`murosVistos`/`cofresVistos`/`recursosVistos`): cumpre "fica fixo no mapa mesmo fora do campo de visão". O painel acumula; não depende de o item estar visível no turno atual.
+        - **Recurso coletado**: guardo o estado `isColetado()` no `Map`; quando passa a `true`, deixo de o desenhar. Se preferires que fique sempre desenhado mesmo coletado (fixação total), digo-me e removo esse filtro.
+        - **Ordem de desenho**: andadas → muros → recursos → cofres → robô, para o robô e os alvos ficarem sempre visíveis.
+      
+      Ponto que **não** toquei: a **memória de atração** do `MotorHeuristico` (recurso persegue coordenada vazia) — depende da tua resposta A/B acima. Confirma A/B e o getter `getObjetos_fixos()`, e fecho essa parte + o `filtrarColisoes` caso queiras passar a usar `ObjetoFixo` tipado em vez do que lá tens.
 
 ---
 
 **PROMPT**
 
-
+      o item só ira sair da memoria em 2 situaões ao pegar o item ou a chegar no campo do item e ele não estive mais; sobre o dto dos muro ja se tinha este codigo, ao colocar o heatmap no intelij esta dando erro no method chave que não pode ser resolvido porque esta dando esse erro
 
 **RESPOSTA**
 
-
+      O erro do `chave` é porque esse método privado vive no `MotorHeuristico`, e agora estás a chamá-lo dentro do `PainelMapaCalor` — são classes diferentes, e um `private` não é visível fora da sua classe. O `PainelMapaCalor` não tem nenhum método `chave`, daí "cannot be resolved".
+      
+      Duas formas de resolver. Recomendo a **A** (o painel é autónomo, não depende do motor para formatar strings — mantém SRP):
+      
+      **A) Adicionar um `chave` privado próprio ao `PainelMapaCalor`.** Cola este método dentro da classe do painel (junto ao `parseChave` que já lá tens):
+      
+      ```java
+      // constrói a chave textual "x,y" (uso interno do painel)
+      private String chave(int x, int y) {
+          return x + "," + y;
+      }
+      ```
+      
+      Isto resolve o erro sem acoplar o painel ao motor. Cada classe tem o seu helper de formatação — é duplicação trivial de uma linha, aceitável e mais limpa do que criar dependência entre UI e heurística.
+      
+      **B)** (não recomendo) tornar o `chave` do `MotorHeuristico` público e chamá-lo a partir do painel — acopla a UI ao motor sem necessidade e suja o SRP.
+      
+      Confirma que os únicos sítios no painel onde usas `chave(...)` são os três do `atualizar` (muros/cofres/recursos). Com o método A colado, compila.
+      
+      ---
+      
+      Sobre a regra de memória que definiste (sai em 2 situações: ao pegar, ou ao chegar à coordenada e já não estar lá) — isto é a **lógica de atração** do `MotorHeuristico`, separada da camada visual do painel. Nota que a tua regra atual **não distingue** "peguei" de "cheguei e não estava": em ambos os casos o gatilho é o robô estar **na coordenada** do recurso. A diferença (pegar vs. já não existir) só importaria para HP/estatística, não para a remoção da memória de atração — o efeito é o mesmo: remover da memória quando estou na coordenada.
+      
+      Queres que eu escreva agora o `alvosRecursos` do `cerebro` com esta regra unificada (remove de `recursosConhecidos` sempre que o robô está na coordenada memorizada, independentemente de ter coletado ou de já lá não estar)? Confirma e envio — é só navegação, não cruza o Kaiky.
 
 ---
 
 **PROMPT**
 
-
+      sim pode implementar essa memoria a ser eliminada ao estar la
 
 **RESPOSTA**
 
+      Instrução base recebida na íntegra. Autoverificação: não suponho chaves (uso `getRecursos_no_mundo()`/`isColetado()` já confirmados); não cruza domínio Kaiky; sem Classe Deus (lógica fica no `cerebro`); chat-only; português.
+      
+      `MotorHeuristico` — regra unificada: o recurso sai de `recursosConhecidos` sempre que o robô está **na coordenada** memorizada (cobre os dois casos que definiste — coletou, ou chegou e já não estava; o gatilho é o mesmo).
+      
+      **1. Início de `decidirAcao` — memorização (mantém-se) + remoção ao estar na coordenada:**
+      
+      ```java
+      int x = p.getO_meu_estado().getX();
+      int y = p.getO_meu_estado().getY();
+      int hp = p.getO_meu_estado().getEnergia();
+      
+      historicoVisitas.merge(chave(x, y), 1, Integer::sum);
+      
+      // memoriza recursos visíveis não coletados (para regresso com HP baixo)
+      if (p.getRecursos_no_mundo() != null) {
+          for (Recurso rec : p.getRecursos_no_mundo()) {
+              if (!rec.isColetado()) {
+                  recursosConhecidos.add(chave(rec.getX(), rec.getY()));
+              }
+          }
+      }
+      
+      // regra de remoção: se estou EM CIMA de um recurso memorizado, tiro-o da memória.
+      // Cobre os dois casos: coletei-o (some ao pisar) ou cheguei e já não existia.
+      recursosConhecidos.remove(chave(x, y));
+      ```
+      
+      **2. `alvosRecursos` simplificado** (já sem a limpeza condicional anterior — a remoção passou para o gatilho "estar na coordenada"):
+      
+      ```java
+      // candidatos de recurso = memorizados + visíveis agora (união, sem duplicados)
+      private List<int[]> alvosRecursos(Percecao p) {
+          Set<String> candidatos = new LinkedHashSet<>(recursosConhecidos);
+          if (p.getRecursos_no_mundo() != null) {
+              for (Recurso rec : p.getRecursos_no_mundo()) {
+                  if (!rec.isColetado()) candidatos.add(chave(rec.getX(), rec.getY()));
+              }
+          }
+          List<int[]> alvos = new ArrayList<>();
+          for (String c : candidatos) {
+              int[] xy = parseChaveInt(c);
+              alvos.add(xy);
+          }
+          return alvos;
+      }
+      
+      // "x,y" -> int[]{x,y}
+      private int[] parseChaveInt(String c) {
+          String[] p = c.split(",");
+          return new int[]{ Integer.parseInt(p[0]), Integer.parseInt(p[1]) };
+      }
+      ```
+      
+      **3. `escolherAlvo` — ajusta a chamada** (perde o parâmetro `x,y` que `alvosRecursos` já não usa):
+      
+      ```java
+      private int[] escolherAlvo(Percecao p, int x, int y, int hp) {
+          int[] cofre = maisProximo(cofresVisiveis(p), x, y);
+          if (hp > 50) return cofre; // HP suficiente: só cofres atraem
+      
+          int[] recurso = maisProximo(alvosRecursos(p), x, y);
+          if (recurso != null) return recurso; // HP <= 50: recurso primeiro (sobrevivência)
+          return cofre;
+      }
+      ```
+      
+      Decisão (auditoria): a remoção acontece **depois** da memorização, no mesmo turno em que o robô pisa a coordenada. Se o recurso ainda existir e for pisado, é coletado pelo servidor e removido da memória; se já não existir, é igualmente removido — em ambos os casos deixa de atrair, evitando perseguição a coordenada esgotada. A união memorizados+visíveis em `alvosRecursos` garante que um recurso visto à distância continua a atrair mesmo depois de sair do raio de visão, até ser pisado.
+      
+      Confirma que `parseChaveInt` não colide com nenhum helper já existente no teu `MotorHeuristico` (se já tens um `parseChave`, reutiliza-o e apaga este).
+      
+      ---
 
+**PROMPT**
+
+      ao fazer test temos alguns problemas que precisam ser resolvidos:
+      
+      1. no heatmap precisa apagar o icone do item ou recurso se o robo ja usou ele como tambem apaga da memoria ja que o heatmap tem que representar como a memoria do robo esta no momento pois itens de vida que foram coletados continuam a aparecer no mapa e os cofres com falha precisam ganhar um f no quadrado deles
+      2. ao andar no mapa cada quadrado nessa ultiam versão do map esta com valor dois em vez de 1 e quando anda por ela denovo aumenta em 2
+      3. ao ficar com pouca vida o robo tenta ir a uma vida mesmo que no seu caminho tenha uma parede e ai ele fica preso num loop de bater na parede e sair dela é preciso que na decisão de rota a parede seja evitada
+      4. nos slides do projeto fala que se passar na velocidade do servidor seremos punidos, mas qual é essa velocidade pois estamos muito lentos e as vezes o robo pensa tanto que demora mais do que o normal pra fazer seu act
+
+**RESPOSTA**
+
+      Autoverificação: pontos 1–3 são navegação/UI (meu domínio); ponto 4 é metade fronteira Kaiky (a "demora a pensar" pode ser o RAG dele) — sinalizo abaixo. Não suponho chaves; reutilizo as já confirmadas.
+      
+      Vou por partes. Duas exigem decisão/confirmação tua antes de código; duas resolvo já.
+      
+      **2. Contador a subir de 2 em 2 — resolvo já (é bug de dupla contagem).**
+      
+      O incremento `historicoVisitas.merge(chave(x,y),1,...)` só devia estar **num** sítio. Se está a somar 2 por passo, está a ser chamado duas vezes por ciclo. As causas prováveis, por ordem:
+      
+      - O `merge` ficou no início de `decidirAcao` **e** também noutro método (ex.: um `passoMaisFrio`/`escolherAlvo` antigo, ou no `AgenteExplorador`). Procura no projeto todas as ocorrências de `historicoVisitas.merge` e de `historicoVisitas.put` — só pode existir **uma**, no início do `decidirAcao`.
+        - Ou o `decidirAcao` está a ser chamado 2x por ciclo no `AgenteExplorador` (uma para decidir, outra algalgures para logging/UI). Confirma que `cerebro.decidirAcao(p)` aparece **uma só vez** por iteração do `while`.
+      
+      Diz-me quantas ocorrências de `historicoVisitas.merge` tens e quantas chamadas a `decidirAcao` há no loop — com isso aponto o sítio exato. Não reescrevo às cegas porque o fix depende de qual dos dois casos é.
+      
+      **3. Recurso atrás de parede → loop a bater na parede — resolvo já (é o bug mais crítico).**
+      
+      Causa: com HP ≤ 50 o `escolherAlvo` devolve o recurso, e o `passoParaAlvo` tenta aproximar-se; se a única direção que reduz Manhattan tem muro, `filtrarColisoes` remove-a, e o robô oscila. O `passoParaAlvo` já devolve `null` quando nenhum passo válido aproxima — mas se ainda entra em loop, é porque o fallback (`passoMaisFrio`) o traz de volta para a casa de onde veio (que é a mais fria adjacente), e no turno seguinte é reatraído. Oscilação clássica.
+      
+      Preciso de confirmar **uma** coisa antes de escolher a correção certa: o teu `filtrarColisoes` usa a lista `objetos_fixos` do turno atual — mas um muro que bloqueia a rota ao recurso pode estar **fora do raio** quando o robô recua. Tens já os muros memorizados (o painel guarda `murosVistos`, mas isso é na UI, não no motor).
+      
+      A correção limpa é dar ao `cerebro` a **sua própria** memória de muros (independente da UI) e, no `passoParaAlvo`, nunca escolher uma direção cujo destino seja muro conhecido. Confirmas que queres que eu adicione `murosConhecidos` ao `MotorHeuristico` (`Set<String>` alimentado a cada perceção a partir de `getObjetos_fixos()`)? Isto é a base para o "grafo de menor custo" que querias mais à frente, e resolve o loop sem hardcode. Sem a tua confirmação não crio a estrutura.
+      
+      **1. Heatmap tem de refletir a memória real (recurso coletado some; cofre falhado ganha "F") — decisão de arquitetura.**
+      
+      Aqui está o ponto de fundo: pediste antes que a camada visual fosse **fixa/persistente** (guardei `recursosVistos`/`cofresVistos` no painel). Agora pedes o oposto — que o mapa reflita a **memória atual** do robô (recurso coletado desaparece, cofre falhado marcado). São requisitos contraditórios, e a Secção 2.2 diz para não quebrar comportamento definido para agradar a pedido pontual. Então tenho de te fazer escolher **a fonte de verdade do desenho**:
+      
+      - **(A) O painel deixa de ter memória própria e desenha o que o `cerebro` sabe.** O motor expõe getters só-de-leitura: `recursosConhecidos`, `cofresFalhados`, `murosConhecidos`. O painel desenha exatamente esses conjuntos → recurso coletado (removido da memória) some automaticamente; cofre falhado aparece com "F". Isto é o que descreves agora e é o mais coerente com "o heatmap representa a memória do robô". **Recomendo A.**
+        - **(B) O painel mantém memória própria** e tu dizes-lhe explicitamente quando remover/marcar. Mais acoplamento e duplicação de estado; não recomendo.
+      
+      Se confirmares **A**, o fluxo fica: o painel recebe no `atualizar(...)` as referências só-de-leitura dos conjuntos do motor (via getters), e desenha-os. O "F" no cofre falhado sai de `cofresFalhados`. O recurso coletado some porque a regra que acabámos de implementar já o remove de `recursosConhecidos` ao pisar.
+      
+      Isto obriga a uma mudança: hoje o painel recebe as **listas do perceive** (`getRecursos_no_mundo()` etc.), que só têm o que está visível **agora**. Para o mapa refletir memória, tem de receber os **conjuntos do motor**. Confirma A e reescrevo o `PainelMapaCalor` + os getters do `MotorHeuristico` de forma coerente (fim da memória visual duplicada no painel).
+      
+      **4. Velocidade do servidor / anti-flood — valor por confirmar + possível fronteira Kaiky.**
+      
+      Duas partes distintas:
+      
+      - **O intervalo mínimo anti-flood exato não está confirmado** (Secção 7 marca-o como "a confirmar"). O enunciado só diz que `Thread.sleep()` deve ser ≥ 350–400 ms por margem de jitter, mas **não** dá o limite real do servidor. Não hardcodeio um valor "rápido" sem o confirmar, senão arriscas o bloqueio de 5s. Como confirmar: no Swagger/servidor não costuma vir documentado; o método prático é empírico — baixar o `sleep` gradualmente (ex.: 400→350→300) e ver a que valor o servidor devolve `"bloqueado"`. Queres que te prepare um pequeno modo de teste que regista a que intervalo aparece o `"bloqueado"`? É navegação/HTTP, meu domínio.
+      
+        - **"O robô pensa tanto que demora mais que o normal"** — se a lentidão é o *pensar* (não o `sleep`), preciso de saber **o que** está a demorar. Se for a heurística (mapa de calor, atração), é meu e otimizo. Mas se o atraso aparece **quando pisa um cofre** e chama o pipeline RAG (embeddings + LLM local no Ollama), isso é **domínio do Kaiky** — o `qwen2.5-coder` a gerar pode levar segundos, e não é algo que eu deva mexer sem sinalizar. Diz-me: a lentidão acontece em movimento normal, ou só perto de cofres? Isso decide se é otimização minha ou conversa com o Kaiky.
+      
+      Resumo do que preciso de ti para avançar:
+      - **(2)** nº de ocorrências de `historicoVisitas.merge` e de chamadas a `decidirAcao` no loop.
+        - **(3)** confirmas criar `murosConhecidos` no `cerebro`?
+        - **(1)** confirmas opção **A** (painel desenha a memória do motor)?
+        - **(4)** a lentidão é em movimento normal ou só junto a cofres?
 
 ---
 
 **PROMPT**
 
-
+      querio que o motorheuristico tenha a info dos murosConhecidos; opcão A usar a memoria do cerebro para o mapa; a lentidão é ao andar, sobre a velocidade pode fazer um modo de teste
 
 **RESPOSTA**
 
-
+      Instrução base recebida na íntegra. Autoverificação: (1) não suponho chaves — uso `getObjetos_fixos()` e getters já confirmados; recluo do valor anti-flood real (a confirmar empiricamente). (2) Não cruza domínio Kaiky — a lentidão é ao andar, logo heurística minha. (3) SRP mantido: memória e decisão no `cerebro`, desenho no painel, HTTP fica no `AgenteExplorador`/`ArenaClient`. (4) Chat-only. (5) Português.
+      
+      Quatro entregas. Vou implementar `murosConhecidos`, ligar o painel à memória do `cerebro` (opção A), o "F" nos cofres falhados, e o modo de teste de velocidade.
+      
+      ---
+      
+      **1. `MotorHeuristico` — `murosConhecidos` + getters só-de-leitura para o painel**
+      
+      Imports e campo:
+      
+      ```java
+      import java.util.Collections;
+      // (já deves ter: HashSet, Set, LinkedHashSet, Map, HashMap, List, ArrayList)
+      
+      // muros memorizados pelo motor (independente da UI). Alimenta a filtragem de rota
+      // mesmo quando o muro saiu do raio de visão. Base para o custo de rota futuro.
+      private final Set<String> murosConhecidos = new HashSet<>();
+      ```
+      
+      No início de `decidirAcao`, memorizar os muros visíveis do turno (a seguir à memorização de recursos):
+      
+      ```java
+      // memoriza muros visíveis (limites + obstáculos internos) para filtragem persistente
+      if (p.getObjetos_fixos() != null) {
+          for (ObjetoFixo m : p.getObjetos_fixos()) {
+              murosConhecidos.add(chave(m.getX(), m.getY()));
+          }
+      }
+      ```
+      
+      Getters só-de-leitura (o painel desenha a memória do motor — opção A):
+      
+      ```java
+      // expõem a memória do motor APENAS para leitura (o painel desenha, não altera) — SRP
+      public Map<String, Integer> getHistoricoVisitas() { return Collections.unmodifiableMap(historicoVisitas); }
+      public Set<String> getMurosConhecidos()  { return Collections.unmodifiableSet(murosConhecidos); }
+      public Set<String> getCofresFalhados()   { return Collections.unmodifiableSet(cofresFalhados); }
+      public Set<String> getRecursosConhecidos(){ return Collections.unmodifiableSet(recursosConhecidos); }
+      ```
+      
+      Import do DTO no topo, se ainda não estiver: `import org.example.modelo.ObjetoFixo;`
+      
+      ---
+      
+      **3. `MotorHeuristico` — evitar muro conhecido na rota ao alvo (corrige o loop de bater na parede)**
+      
+      O `passoParaAlvo` passa a rejeitar qualquer destino que seja muro conhecido, mesmo que o `filtrarColisoes` do turno já não o "veja". Substitui o `passoParaAlvo` por:
+      
+      ```java
+      // entre as ações válidas, a que mais aproxima do alvo, nunca entrando em muro conhecido.
+      // Desempate pela casa mais fria. Devolve null se nenhum passo aproxima -> fallback heatmap.
+      private String passoParaAlvo(List<String> validas, int x, int y, int[] alvo) {
+          int distAtual = manhattan(x, y, alvo[0], alvo[1]);
+          String melhor = null;
+          int melhorDist = Integer.MAX_VALUE;
+          int melhorVisitas = Integer.MAX_VALUE;
+          for (String acao : validas) {
+              int[] d = destino(acao, x, y);
+              if (murosConhecidos.contains(chave(d[0], d[1]))) continue; // nunca ir para muro conhecido
+              int dist = manhattan(d[0], d[1], alvo[0], alvo[1]);
+              if (dist >= distAtual) continue; // só passos que aproximam
+              int visitas = historicoVisitas.getOrDefault(chave(d[0], d[1]), 0);
+              if (dist < melhorDist || (dist == melhorDist && visitas < melhorVisitas)) {
+                  melhorDist = dist; melhorVisitas = visitas; melhor = acao;
+              }
+          }
+          return melhor;
+      }
+      ```
+      
+      E no `passoMaisFrio` (fallback), também excluir muro conhecido, para o robô não se atirar contra parede memorizada ao explorar:
+      
+      ```java
+      private String passoMaisFrio(List<String> validas, int x, int y) {
+          String melhor = null;
+          int menorVisitas = Integer.MAX_VALUE;
+          for (String acao : validas) {
+              int[] d = destino(acao, x, y);
+              if (murosConhecidos.contains(chave(d[0], d[1]))) continue; // evita muro memorizado
+              int visitas = historicoVisitas.getOrDefault(chave(d[0], d[1]), 0);
+              if (visitas < menorVisitas) { menorVisitas = visitas; melhor = acao; }
+          }
+          // se todas as válidas caírem em muro conhecido (raro), usa a 1ª válida como último recurso
+          return (melhor != null) ? melhor : validas.get(0);
+      }
+      ```
+      
+      Decisão (auditoria): o loop acontecia porque o alvo (recurso) estava atrás de muro e o robô oscilava entre aproximar e recuar. Filtrar por `murosConhecidos` na escolha do passo elimina a direção impossível de forma persistente; se nenhum passo aproxima, cai no heatmap e contorna. Nota: isto resolve o "não bater na parede"; encontrar o **desvio ótimo** à volta do muro é o BFS/A\* da fase de grafos — este filtro é o passo intermédio determinístico.
+      
+      ---
+      
+      **1+heatmap. `PainelMapaCalor` — desenha a memória do `cerebro` (opção A); "F" nos cofres falhados; recurso coletado some**
+      
+      O painel deixa de ter memória visual própria e passa a receber os conjuntos do motor. Reescrito:
+      
+      ```java
+      package org.example.ui;
+      
+      import javax.swing.JPanel;
+      import java.awt.Color;
+      import java.awt.Font;
+      import java.awt.Graphics;
+      import java.awt.Graphics2D;
+      import java.util.Map;
+      import java.util.Set;
+      
+      // Só desenha (SRP). Reflete a MEMÓRIA do cerebro: recebe conjuntos só-de-leitura
+      // (visitas, muros, recursos conhecidos, cofres falhados) + posição do robô.
+      public class PainelMapaCalor extends JPanel {
+      
+          private final Map<String, Integer> historicoVisitas;
+          private final Set<String> murosConhecidos;
+          private final Set<String> recursosConhecidos;
+          private final Set<String> cofresFalhados;
+      
+          private int xRobo = 0;
+          private int yRobo = 0;
+      
+          private static final Color COR_ANDADA = new Color(60, 90, 160);
+          private static final Color COR_MURO   = new Color(150, 90, 30);
+      
+          // recebe as referências só-de-leitura do cerebro (partilhadas, refletem sempre o estado atual)
+          public PainelMapaCalor(Map<String, Integer> historicoVisitas,
+                                 Set<String> murosConhecidos,
+                                 Set<String> recursosConhecidos,
+                                 Set<String> cofresFalhados) {
+              this.historicoVisitas = historicoVisitas;
+              this.murosConhecidos = murosConhecidos;
+              this.recursosConhecidos = recursosConhecidos;
+              this.cofresFalhados = cofresFalhados;
+              setBackground(Color.BLACK);
+          }
+      
+          // só posição do robô muda por chamada; o resto é lido dos conjuntos partilhados
+          public void atualizar(int x, int y) {
+              this.xRobo = x;
+              this.yRobo = y;
+              repaint();
+          }
+      
+          @Override
+          protected void paintComponent(Graphics g) {
+              super.paintComponent(g);
+              Graphics2D g2 = (Graphics2D) g;
+      
+              int maxX = xRobo, maxY = yRobo;
+              for (String k : historicoVisitas.keySet())   { int[] c = parseChave(k); maxX = Math.max(maxX, c[0]); maxY = Math.max(maxY, c[1]); }
+              for (String k : murosConhecidos)             { int[] c = parseChave(k); maxX = Math.max(maxX, c[0]); maxY = Math.max(maxY, c[1]); }
+              for (String k : recursosConhecidos)          { int[] c = parseChave(k); maxX = Math.max(maxX, c[0]); maxY = Math.max(maxY, c[1]); }
+              for (String k : cofresFalhados)              { int[] c = parseChave(k); maxX = Math.max(maxX, c[0]); maxY = Math.max(maxY, c[1]); }
+      
+              int colunas = maxX + 1, linhas = maxY + 1;
+              int lado = Math.min(getWidth() / colunas, getHeight() / linhas);
+              if (lado < 1) lado = 1;
+      
+              // casas andadas: cor única + número de visitas
+              g2.setFont(new Font("Monospaced", Font.BOLD, Math.max(8, lado / 3)));
+              for (Map.Entry<String, Integer> e : historicoVisitas.entrySet()) {
+                  int[] c = parseChave(e.getKey());
+                  int px = c[0] * lado, py = (linhas - 1 - c[1]) * lado;
+                  g2.setColor(COR_ANDADA);
+                  g2.fillRect(px, py, lado, lado);
+                  desenharTextoCentrado(g2, String.valueOf(e.getValue()), px, py, lado, Color.WHITE);
+              }
+      
+              // muros (castanho) — memória do motor
+              g2.setColor(COR_MURO);
+              for (String k : murosConhecidos) {
+                  int[] c = parseChave(k);
+                  g2.fillRect(c[0] * lado, (linhas - 1 - c[1]) * lado, lado, lado);
+              }
+      
+              // recursos conhecidos (verde) — somem sozinhos quando o cerebro os remove (coletados)
+              g2.setColor(Color.GREEN);
+              for (String k : recursosConhecidos) {
+                  int[] c = parseChave(k);
+                  g2.fillRect(c[0] * lado, (linhas - 1 - c[1]) * lado, lado, lado);
+              }
+      
+              // cofres falhados (vermelho) com "F" central
+              for (String k : cofresFalhados) {
+                  int[] c = parseChave(k);
+                  int px = c[0] * lado, py = (linhas - 1 - c[1]) * lado;
+                  g2.setColor(new Color(120, 30, 30));
+                  g2.fillRect(px, py, lado, lado);
+                  desenharTextoCentrado(g2, "F", px, py, lado, Color.WHITE);
+              }
+      
+              // grelha
+              g2.setColor(new Color(40, 40, 40));
+              for (int i = 0; i <= colunas; i++) g2.drawLine(i * lado, 0, i * lado, linhas * lado);
+              for (int j = 0; j <= linhas; j++) g2.drawLine(0, j * lado, colunas * lado, j * lado);
+      
+              // robô (ciano)
+              g2.setColor(Color.CYAN);
+              g2.fillOval(xRobo * lado, (linhas - 1 - yRobo) * lado, lado, lado);
+          }
+      
+          private void desenharTextoCentrado(Graphics2D g2, String txt, int px, int py, int lado, Color cor) {
+              g2.setColor(cor);
+              int tw = g2.getFontMetrics().stringWidth(txt);
+              int th = g2.getFontMetrics().getAscent();
+              g2.drawString(txt, px + (lado - tw) / 2, py + (lado + th) / 2);
+          }
+      
+          private int[] parseChave(String chave) {
+              String[] partes = chave.split(",");
+              return new int[]{ Integer.parseInt(partes[0]), Integer.parseInt(partes[1]) };
+          }
+      }
+      ```
+      
+      Construção no `AgenteExplorador` (passa a memória do `cerebro`):
+      
+      ```java
+      PainelMapaCalor painel = new PainelMapaCalor(
+          cerebro.getHistoricoVisitas(),
+          cerebro.getMurosConhecidos(),
+          cerebro.getRecursosConhecidos(),
+          cerebro.getCofresFalhados()
+      );
+      ```
+      
+      E a chamada no fim do ciclo volta a ser só posição:
+      
+      ```java
+      painel.atualizar(p.getO_meu_estado().getX(), p.getO_meu_estado().getY());
+      ```
+      
+      Decisão (auditoria): o painel recebe as **mesmas referências** dos conjuntos do `cerebro` (não cópias). Como são `unmodifiableSet/Map`, o painel lê o estado vivo mas não o altera — o desenho reflete sempre a memória real. Recurso coletado desaparece porque o `cerebro` o remove de `recursosConhecidos` ao pisar; o cofre falhado aparece com "F" porque entra em `cofresFalhados`. Camadas por ordem (andadas→muros→recursos→cofres→robô) para nada tapar o robô.
+      
+      ---
+      
+      **2. Contador +2 por passo — ainda preciso do diagnóstico**
+      
+      Não altero código sem localizar a dupla contagem (não suponho). Confirma:
+      - Quantas ocorrências de `historicoVisitas.merge` (ou `.put`) existem no `MotorHeuristico`?
+        - Quantas chamadas a `cerebro.decidirAcao(...)` há por iteração do `while` no `AgenteExplorador`?
+      
+      O `merge(...,1,Integer::sum)` soma exatamente 1. +2 só acontece se houver duas execuções por ciclo. Com estes dois números aponto o sítio.
+      
+      ---
+      
+      **4. Modo de teste de velocidade anti-flood**
+      
+      O intervalo mínimo real **não está confirmado** (Instrução base §7 marca-o a confirmar). Este modo mede-o empiricamente: baixa o `sleep` progressivamente e regista a que valor o servidor devolve `"bloqueado"`. É navegação/HTTP (meu domínio), isolado numa classe à parte para não poluir o `AgenteExplorador`.
+      
+      Preciso de confirmar **uma** coisa antes de o escrever certo: qual é a **string exata do campo status** e o **nome desse campo** na resposta do `/action` quando há bloqueio anti-flood? A Instrução base §6 lista "status de resposta" como não confirmado. Já confirmaste `{"status":"sucesso"}` no sucesso e `{"status":"falha"}` no `/unlock`; para o anti-flood o enunciado sugere `"bloqueado"` mas não está verificado no Swagger. Confirma o campo e a string para eu detetar o bloqueio corretamente — sem isso o teste não sabe reconhecer quando foi travado.
+      
+      Enquanto confirmas, a estrutura do modo de teste (deixo o esqueleto; o detetor de bloqueio fica parametrizado até confirmares a string):
+      
+      ```java
+      package org.example.rede;
+      
+      // Modo de teste isolado: mede empiricamente o intervalo mínimo anti-flood.
+      // Baixa o sleep progressivamente e regista a que valor o servidor bloqueia.
+      // NÃO faz parte do ciclo normal do agente — corre à parte, uma vez, para calibrar.
+      public class TesteVelocidade {
+      
+          private final ArenaClient arena; // reutiliza o cliente HTTP existente (SRP: HTTP fica no ArenaClient)
+      
+          public TesteVelocidade(ArenaClient arena) {
+              this.arena = arena;
+          }
+      
+          // testa intervalos decrescentes; para no primeiro que provoca bloqueio
+          public void calibrar(String roomId, String robotId) throws InterruptedException {
+              int[] intervalos = {500, 450, 400, 350, 300, 250, 200, 150, 100};
+              for (int ms : intervalos) {
+                  boolean bloqueado = rajada(roomId, robotId, ms, 10); // 10 pedidos seguidos a este ritmo
+                  System.out.println("Intervalo " + ms + "ms -> " + (bloqueado ? "BLOQUEADO" : "ok"));
+                  if (bloqueado) {
+                      System.out.println(">> Limite seguro fica ACIMA de " + ms + "ms. Usa margem sobre este valor.");
+                      return;
+                  }
+                  Thread.sleep(5000); // deixa o servidor 'arrefecer' entre séries (evita arrastar bloqueio)
+              }
+              System.out.println(">> Nenhum bloqueio até 100ms nesta bateria.");
+          }
+      
+          // dispara N ações ao ritmo dado; devolve true se detetar bloqueio
+          private boolean rajada(String roomId, String robotId, int ms, int n) throws InterruptedException {
+              for (int i = 0; i < n; i++) {
+                  String status = arena.action(roomId, robotId, "MOVER_NORTE"); // ajusta à assinatura real do teu ArenaClient
+                  // TODO: confirmar campo/string de bloqueio no Swagger antes de ativar esta deteção
+                  // if ("bloqueado".equals(status)) return true;
+                  Thread.sleep(ms);
+              }
+              return false;
+          }
+      }
+      ```
+      
+      Assim que confirmares o campo/string do bloqueio, descomento a deteção e o teste fica funcional. Confirma também a **assinatura real** de `arena.action(...)` (o que devolve — a string de status, ou um objeto?) para eu ligar certo.
+      
+      Resumo do que preciso: **(2)** os dois números do diagnóstico; **(4)** campo+string do bloqueio anti-flood e o retorno de `arena.action(...)`.
 
 ---
 
 **PROMPT**
 
-
+      package org.example.heuristica;
+      
+      import org.example.modelo.ObjetoFixo;
+      import org.example.modelo.Percecao;
+      import org.example.ui.PainelMapaCalor;
+      
+      import java.util.ArrayList;
+      import java.util.List;
+      import java.util.HashMap;
+      import java.util.Map;
+      import java.util.Collections;
+      import java.util.Set;
+      import java.util.HashSet;
+      import org.example.modelo.Recurso;
+      import org.example.modelo.Cofre;
+      import java.util.LinkedHashSet;
+      import java.util.Collections;
+      import org.example.modelo.ObjetoFixo;
+      
+      
+          // Cérebro determinístico. Decide a ação SOZINHO. Não faz HTTP/UI/Ollama.
+          public class MotorHeuristico {
+      
+          // registar_cofre_falhado: chamado pelo AgenteExplorador quando o /unlock devolve {"status":"falha"}.
+          // O motor não faz HTTP; só memoriza a coordenada para deixar de a atrair.
+          public void registarCofreFalhado(int x, int y) {
+              cofresFalhados.add(chave(x, y));
+          }
+      
+          // cofreSobActual: devolve o Cofre em cima do qual o robô está (coords iguais e não falhado),
+          // ou null. Serve para o orquestrador saber quando acionar o /unlock. Não faz HTTP.
+          public Cofre cofreSobActual(Percecao p) {
+              int x = p.getO_meu_estado().getX();
+              int y = p.getO_meu_estado().getY();
+              if (p.getCofres_no_mundo() == null) return null;
+              for (Cofre c : p.getCofres_no_mundo()) {
+                  if (c.getX() == x && c.getY() == y
+                          && !cofresFalhados.contains(chave(x, y))) {
+                      return c;
+                  }
+              }
+              return null;
+          }
+      
+      
+              // As quatro intenções base. Confirmadas no Swagger.
+          private static final String[] INTENCOES = {
+                  "MOVER_NORTE", "MOVER_SUL", "MOVER_ESTE", "MOVER_OESTE"
+          };
+      
+              // expõem a memória do motor APENAS para leitura (o painel desenha, não altera) — SRP
+              public Map<String, Integer> getHistoricoVisitas() { return Collections.unmodifiableMap(historicoVisitas); }
+              public Set<String> getMurosConhecidos()  { return Collections.unmodifiableSet(murosConhecidos); }
+              public Set<String> getCofresFalhados()   { return Collections.unmodifiableSet(cofresFalhados); }
+              public Set<String> getRecursosConhecidos(){ return Collections.unmodifiableSet(recursosConhecidos); }
+              // constrói a chave textual da coordenada para o dicionário
+              private String chave(int x, int y) {
+                  return x + "," + y;
+              }
+      
+              // calcula a coordenada de destino de uma ação (mapeamento já confirmado na Fase 1+2)
+              private int[] destino(String acao, int x, int y) {
+                  switch (acao) {
+                      case "MOVER_NORTE": return new int[]{x, y - 1};
+                      case "MOVER_SUL":   return new int[]{x, y + 1};
+                      case "MOVER_ESTE":  return new int[]{x + 1, y};
+                      case "MOVER_OESTE": return new int[]{x - 1, y};
+                      default:            return new int[]{x, y}; // ação inesperada: não desloca
+                  }
+              }
+      
+      
+              // ajusta o tipo/nome de 'p' ao teu DTO real do /perceive
+              public String decidirAcao(Percecao p) {
+                  int x = p.getO_meu_estado().getX();
+                  int y = p.getO_meu_estado().getY();
+                  int hp = p.getO_meu_estado().getEnergia();
+      
+                  // memoriza recursos visíveis não coletados (para regresso com HP baixo)
+                  if (p.getRecursos_no_mundo() != null) {
+                      for (Recurso rec : p.getRecursos_no_mundo()) {
+                          if (!rec.isColetado()) {
+                              recursosConhecidos.add(chave(rec.getX(), rec.getY()));
+                          }
+                      }
+                  }
+      
+                  // memoriza muros visíveis (limites + obstáculos internos) para filtragem persistente
+                  if (p.getObjetos_fixos() != null) {
+                      for (ObjetoFixo m : p.getObjetos_fixos()) {
+                          murosConhecidos.add(chave(m.getX(), m.getY()));
+                      }
+                  }
+      
+                  // mapa de calor: regista a passagem pela casa atual (casa andada = valor >=1; não andada = 0)
+                  historicoVisitas.merge(chave(x, y), 1, Integer::sum);
+      
+                  // 1) intenções base filtradas por colisões (método já existente)
+                  List<String> validas = filtrarColisoes(p);
+                  if (validas.isEmpty()) return null; // cercado por muros: caller não deve mover
+      
+                  // 2) escolher alvo de atração (recurso ou cofre)
+                  int[] alvo = escolherAlvo(p, x, y, hp);
+      
+                  // 3) se há alvo, dar o passo que mais aproxima (Manhattan = nº de passos = HP gasto);
+                  //    se um muro bloquear a aproximação, cai no mapa de calor para contornar
+                  if (alvo != null) {
+                      String acao = passoParaAlvo(validas, x, y, alvo);
+                      if (acao != null) return acao;
+                  }
+                  return passoMaisFrio(validas, x, y);
+              }
+      
+              // devolve as coords do alvo, ou null se nada a atrair.
+              // Regra: cofre atrai sempre (exceto falhados). Recurso só quando HP <= 50.
+              private int[] escolherAlvo(Percecao p, int x, int y, int hp) {
+                  int[] cofre = maisProximo(cofresVisiveis(p), x, y);
+                  if (hp > 50) return cofre; // HP suficiente: só cofres atraem
+      
+                  int[] recurso = maisProximo(alvosRecursos(p), x, y);
+                  if (recurso != null) return recurso; // HP <= 50: recurso primeiro (sobrevivência)
+                  return cofre;
+              }
+      
+              // candidatos de recurso = memorizados + visíveis agora (união, sem duplicados)
+              private List<int[]> alvosRecursos(Percecao p) {
+                  Set<String> candidatos = new LinkedHashSet<>(recursosConhecidos);
+                  if (p.getRecursos_no_mundo() != null) {
+                      for (Recurso rec : p.getRecursos_no_mundo()) {
+                          if (!rec.isColetado()) candidatos.add(chave(rec.getX(), rec.getY()));
+                      }
+                  }
+                  List<int[]> alvos = new ArrayList<>();
+                  for (String c : candidatos) {
+                      int[] xy = parseChaveInt(c);
+                      alvos.add(xy);
+                  }
+                  return alvos;
+              }
+      
+              // "x,y" -> int[]{x,y}
+              private int[] parseChaveInt(String c) {
+                  String[] p = c.split(",");
+                  return new int[]{ Integer.parseInt(p[0]), Integer.parseInt(p[1]) };
+              }
+      
+              // recursos ainda não coletados
+              private List<int[]> recursosVisiveis(Percecao p) {
+                  List<int[]> r = new ArrayList<>();
+                  if (p.getRecursos_no_mundo() == null) return r;
+                  for (Recurso rec : p.getRecursos_no_mundo()) {
+                      if (!rec.isColetado()) r.add(new int[]{rec.getX(), rec.getY()});
+                  }
+                  return r;
+              }
+      
+              // cofres que não estão na lista negra
+              private List<int[]> cofresVisiveis(Percecao p) {
+                  List<int[]> r = new ArrayList<>();
+                  if (p.getCofres_no_mundo() == null) return r;
+                  for (Cofre c : p.getCofres_no_mundo()) {
+                      if (!cofresFalhados.contains(chave(c.getX(), c.getY()))) {
+                          r.add(new int[]{c.getX(), c.getY()});
+                      }
+                  }
+                  return r;
+              }
+      
+              // alvo com menor distância de Manhattan; null se lista vazia
+              private int[] maisProximo(List<int[]> alvos, int x, int y) {
+                  int[] melhor = null;
+                  int menor = Integer.MAX_VALUE;
+                  for (int[] a : alvos) {
+                      int d = manhattan(x, y, a[0], a[1]);
+                      if (d < menor) { menor = d; melhor = a; }
+                  }
+                  return melhor;
+              }
+      
+              private int manhattan(int x1, int y1, int x2, int y2) {
+                  return Math.abs(x1 - x2) + Math.abs(y1 - y2);
+              }
+      
+              // entre as ações válidas, a que mais aproxima do alvo, nunca entrando em muro conhecido.
+              // Desempate pela casa mais fria. Devolve null se nenhum passo aproxima -> fallback heatmap.
+              private String passoParaAlvo(List<String> validas, int x, int y, int[] alvo) {
+                  int distAtual = manhattan(x, y, alvo[0], alvo[1]);
+                  String melhor = null;
+                  int melhorDist = Integer.MAX_VALUE;
+                  int melhorVisitas = Integer.MAX_VALUE;
+                  for (String acao : validas) {
+                      int[] d = destino(acao, x, y);
+                      if (murosConhecidos.contains(chave(d[0], d[1]))) continue; // nunca ir para muro conhecido
+                      int dist = manhattan(d[0], d[1], alvo[0], alvo[1]);
+                      if (dist >= distAtual) continue; // só passos que aproximam
+                      int visitas = historicoVisitas.getOrDefault(chave(d[0], d[1]), 0);
+                      if (dist < melhorDist || (dist == melhorDist && visitas < melhorVisitas)) {
+                          melhorDist = dist; melhorVisitas = visitas; melhor = acao;
+                      }
+                  }
+                  return melhor;
+              }
+      
+              // bloco adjacente mais frio (comportamento base de exploração)
+              private String passoMaisFrio(List<String> validas, int x, int y) {
+                  String melhor = null;
+                  int menorVisitas = Integer.MAX_VALUE;
+                  for (String acao : validas) {
+                      int[] d = destino(acao, x, y);
+                      if (murosConhecidos.contains(chave(d[0], d[1]))) continue; // evita muro memorizado
+                      int visitas = historicoVisitas.getOrDefault(chave(d[0], d[1]), 0);
+                      if (visitas < menorVisitas) { menorVisitas = visitas; melhor = acao; }
+                      }
+                  // se todas as válidas caírem em muro conhecido (raro), usa a 1ª válida como último recurso
+                  return (melhor != null) ? melhor : validas.get(0);
+                  }
+              }
+      
+          // Remove as intenções cujo destino colide com um muro (objetos_fixos).
+          private List<String> filtrarColisoes(Percecao p) {
+              int x = p.getO_meu_estado().getX();
+              int y = p.getO_meu_estado().getY();
+              List<String> validas = new ArrayList<>();
+      
+              for (String intencao : INTENCOES) {
+                  int destinoX = x;
+                  int destinoY = y;
+                  switch (intencao) {
+                      case "MOVER_NORTE": destinoY = y - 1; break;
+                      case "MOVER_SUL":   destinoY = y + 1; break;
+                      case "MOVER_ESTE":  destinoX = x + 1; break;
+                      case "MOVER_OESTE": destinoX = x - 1; break;
+                  }
+                  if (!haMuro(p, destinoX, destinoY)) {
+                      validas.add(intencao);
+                  }
+              }
+              return validas;
+          }
+      
+          // expõe o mapa de calor apenas para leitura (o painel desenha, não altera)
+              public Map<String, Integer> getHistoricoVisitas() {
+                  return Collections.unmodifiableMap(historicoVisitas);
+              }
+      
+          // True se algum objeto_fixo ocupa a coordenada dada.
+          private boolean haMuro(Percecao p, int x, int y) {
+              if (p.getObjetos_fixos() == null) return false;
+              for (ObjetoFixo muro : p.getObjetos_fixos()) {
+                  if (muro.getX() == x && muro.getY() == y) {
+                      return true;
+                  }
+              }
+              return false;
+          }
+      }
+      
+      ao colocar essas atualizaçoes no motoe heurisitcio começamos a ter muitos bugs pois existe muito code lixo de coisas que não utilizamos mais, analize o codigo e me diga oque esta errado o porque e oq que fazer a respeio de cada parte; nao envie o novo codigo completo do motor apenas pequenos trechos que necessitam ser alterados
 
 **RESPOSTA**
 
-
-
----
-
-**PROMPT**
-
-
-
-**RESPOSTA**
-
-
+      Analisei o ficheiro. Há erros de compilação reais (não só lixo) — o principal é estrutural e explica "muitos bugs". Por ordem de gravidade:
+      
+      **1. ERRO CRÍTICO — a classe fecha cedo demais; três métodos ficam FORA da classe.**
+      
+      Repara na chaveta a seguir ao `passoMaisFrio`:
+      
+      ```java
+                  return (melhor != null) ? melhor : validas.get(0);
+                  }   // <- fecha passoMaisFrio
+              }       // <- ESTA chaveta fecha a CLASSE MotorHeuristico
+      ```
+      
+      A partir daqui, `filtrarColisoes`, o segundo `getHistoricoVisitas` e `haMuro` ficam **soltos fora da classe**. É isto que dispara erros em cascata (e provavelmente o "package statement" outra vez, ou "class not found"). **O quê fazer:** apagar essa `}` a mais (a que fecha a classe cedo) e garantir que só existe **uma** `}` de fecho, no fim do ficheiro, depois do `haMuro`.
+      
+      **2. ERRO — `getHistoricoVisitas()` está declarado DUAS vezes.** Método duplicado = não compila.
+      
+      Existe no topo:
+      ```java
+      public Map<String, Integer> getHistoricoVisitas() { return Collections.unmodifiableMap(historicoVisitas); }
+      ```
+      E outra vez lá em baixo:
+      ```java
+      // expõe o mapa de calor apenas para leitura (o painel desenha, não altera)
+          public Map<String, Integer> getHistoricoVisitas() {
+              return Collections.unmodifiableMap(historicoVisitas);
+          }
+      ```
+      **O quê fazer:** apagar o segundo (o de baixo, junto ao `haMuro`). Fica só o do bloco de getters no topo.
+      
+      **3. ERRO — campos nunca declarados.** O código usa `historicoVisitas`, `cofresFalhados`, `murosConhecidos`, `recursosConhecidos`, mas **não vejo a declaração de nenhum** no ficheiro. Sem isto nada compila. **O quê fazer:** declarar os quatro campos logo a seguir a `INTENCOES`:
+      
+      ```java
+      // memória do cérebro (estado persistente entre turnos)
+      private final Map<String, Integer> historicoVisitas = new HashMap<>();
+      private final Set<String> murosConhecidos = new HashSet<>();
+      private final Set<String> recursosConhecidos = new LinkedHashSet<>();
+      private final Set<String> cofresFalhados = new HashSet<>();
+      ```
+      
+      **4. LIXO — import não usado + duplicados.** No topo:
+      - `import org.example.ui.PainelMapaCalor;` — o motor **não** referencia o painel (e não deve, por SRP). Remove.
+        - `import java.util.Collections;` aparece **duas vezes**; `import org.example.modelo.ObjetoFixo;` aparece **duas vezes**. Remove as repetições.
+      
+      Não são erros fatais (o Java tolera imports não usados), mas o `PainelMapaCalor` no motor é um sinal errado para a auditoria — o motor não conhece a UI.
+      
+      **5. LIXO — `recursosVisiveis()` não é usado por ninguém.** Ficou órfão quando passámos a usar `alvosRecursos()` (que junta memorizados + visíveis). **O quê fazer:** apagar o método `recursosVisiveis` inteiro. Confirma primeiro com Ctrl+F que não há nenhuma chamada a `recursosVisiveis(` — se não houver, remove.
+      
+      **6. FALTA — a remoção do recurso da memória ao pisar não está no ficheiro.** Tínhamos combinado (última decisão) que o recurso sai de `recursosConhecidos` quando o robô está na coordenada. No `decidirAcao` atual **não existe** o `recursosConhecidos.remove(...)`. Sem isto, o recurso coletado **continua** a atrair e a aparecer no mapa — que é exatamente um dos bugs que relataste antes. **O quê fazer:** no `decidirAcao`, logo a seguir ao bloco que memoriza recursos, adicionar:
+      
+      ```java
+      // remove da memória o recurso onde o robô está agora (coletou-o, ou já não existe)
+      recursosConhecidos.remove(chave(x, y));
+      ```
+      
+      **7. AINDA POR RESOLVER — o "+2 por passo".** No `decidirAcao` só há **um** `historicoVisitas.merge(...,1,...)`, que soma 1. Logo o +2 **não** vem deste método. Confirma no `AgenteExplorador`: quantas vezes `cerebro.decidirAcao(p)` é chamado por iteração? Se for chamado 2x (ex.: uma para decidir a ação, outra para o painel/log), cada passo conta 2. **O quê fazer:** garantir uma única chamada a `decidirAcao` por ciclo. Cola a zona do `while` do `AgenteExplorador` se quiseres que localize.
+      
+      ---
+      
+      Resumo do que muda, por prioridade: (1) apagar a `}` extra que fecha a classe cedo — é a causa da maioria dos erros; (2) apagar o `getHistoricoVisitas` duplicado; (3) declarar os 4 campos; depois limpar (4)(5) e adicionar (6). O ponto (7) confirma-se no `AgenteExplorador`.
+      
+      Uma pergunta antes de mexeres no resto: o `filtrarColisoes` atual usa só `p.getObjetos_fixos()` (muros visíveis do turno), enquanto `passoParaAlvo`/`passoMaisFrio` já usam `murosConhecidos` (memória). Queres que o `filtrarColisoes` passe também a consultar `murosConhecidos`, para o robô não tentar entrar num muro que já viu mas saiu do raio? Diz-me e passo-te só esse trecho.
 
 ---
 

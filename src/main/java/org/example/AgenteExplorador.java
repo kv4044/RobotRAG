@@ -33,7 +33,12 @@ public class AgenteExplorador {
         System.out.println("Registado em (" + reg.getEstado().getX() + ","
                 + reg.getEstado().getY() + ") energia=" + reg.getEstado().getEnergia());
 
-        PainelMapaCalor painel = new PainelMapaCalor(cerebro.getHistoricoVisitas());
+        PainelMapaCalor painel = new PainelMapaCalor(
+                cerebro.getHistoricoVisitas(),
+                cerebro.getMurosConhecidos(),
+                cerebro.getRecursosConhecidos(),
+                cerebro.getCofresFalhados()
+        );
 
         JFrame janela = new JFrame("Mapa de Calor - NeymarRAG");
         janela.add(painel);
@@ -82,14 +87,10 @@ public class AgenteExplorador {
                             + " -> " + acao);
 
                 }
-                
+
                 // no fim de cada ciclo Sense-Think-Act:
-                painel.atualizar(
-                        p.getO_meu_estado().getX(),
-                        p.getO_meu_estado().getY(),
-                        p.getRecursos_no_mundo(),
-                        p.getCofres_no_mundo()
-                );
+                painel.atualizar(p.getO_meu_estado().getX(), p.getO_meu_estado().getY());
+
             } catch (Exception e) {
                 // Resiliência: timeouts/micro-cortes não derrubam o agente.
                 System.out.println("Falha no turno (a retomar): " + e.getMessage());

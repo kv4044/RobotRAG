@@ -2,7 +2,6 @@ package org.example.heuristica;
 
 import org.example.modelo.ObjetoFixo;
 import org.example.modelo.Percecao;
-import org.example.ui.PainelMapaCalor;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -45,16 +44,17 @@ import java.util.LinkedHashSet;
             "MOVER_NORTE", "MOVER_SUL", "MOVER_ESTE", "MOVER_OESTE"
     };
 
-        // mapa de calor: chave "x,y" -> nº de vezes que o robô pisou essa coordenada
+        // memória do cérebro (estado persistente entre turnos)
         private final Map<String, Integer> historicoVisitas = new HashMap<>();
-
-        // coordenadas de recursos já vistos, para lá voltar quando o HP estiver baixo.
-        // LinkedHashSet: sem duplicados e mantém ordem de descoberta (determinístico p/ auditoria).
+        private final Set<String> murosConhecidos = new HashSet<>();
         private final Set<String> recursosConhecidos = new LinkedHashSet<>();
-
-        // coordenadas de cofres já falhados; populado na Fase 5 (após confirmar o status do /unlock no Swagger)
         private final Set<String> cofresFalhados = new HashSet<>();
 
+        // expõem a memória do motor APENAS para leitura (o painel desenha, não altera) — SRP
+        public Map<String, Integer> getHistoricoVisitas() { return Collections.unmodifiableMap(historicoVisitas); }
+        public Set<String> getMurosConhecidos()  { return Collections.unmodifiableSet(murosConhecidos); }
+        public Set<String> getCofresFalhados()   { return Collections.unmodifiableSet(cofresFalhados); }
+        public Set<String> getRecursosConhecidos(){ return Collections.unmodifiableSet(recursosConhecidos); }
         // constrói a chave textual da coordenada para o dicionário
         private String chave(int x, int y) {
             return x + "," + y;
@@ -78,12 +78,22 @@ import java.util.LinkedHashSet;
             int y = p.getO_meu_estado().getY();
             int hp = p.getO_meu_estado().getEnergia();
 
-            // memoriza recursos visíveis (não coletados) para regresso futuro com HP baixo
+            // memoriza recursos visíveis não coletados (para regresso com HP baixo)
             if (p.getRecursos_no_mundo() != null) {
                 for (Recurso rec : p.getRecursos_no_mundo()) {
                     if (!rec.isColetado()) {
                         recursosConhecidos.add(chave(rec.getX(), rec.getY()));
                     }
+                }
+            }
+
+            // remove da memória o recurso onde o robô está agora (coletou-o, ou já não existe)
+            recursosConhecidos.remove(chave(x, y));
+
+            // memoriza muros visíveis (limites + obstáculos internos) para filtragem persistente
+            if (p.getObjetos_fixos() != null) {
+                for (ObjetoFixo m : p.getObjetos_fixos()) {
+                    murosConhecidos.add(chave(m.getX(), m.getY()));
                 }
             }
 
@@ -107,57 +117,36 @@ import java.util.LinkedHashSet;
         }
 
         // devolve as coords do alvo, ou null se nada a atrair.
-// Regra: cofre atrai sempre (exceto falhados). Recurso só quando HP <= 50.
+        // Regra: cofre atrai sempre (exceto falhados). Recurso só quando HP <= 50.
         private int[] escolherAlvo(Percecao p, int x, int y, int hp) {
             int[] cofre = maisProximo(cofresVisiveis(p), x, y);
+            if (hp > 50) return cofre; // HP suficiente: só cofres atraem
 
-            // com HP suficiente: só cofres importam
-            if (hp > 50) return cofre;
-
-            // HP <= 50: recursos entram na jogada (visíveis + memorizados)
-            int[] recurso = maisProximo(alvosRecursos(p, x, y), x, y);
-
-            // sobrevivência primeiro: se há recurso, prioriza-o sobre o cofre
-            if (recurso != null) return recurso;
+            int[] recurso = maisProximo(alvosRecursos(p), x, y);
+            if (recurso != null) return recurso; // HP <= 50: recurso primeiro (sobrevivência)
             return cofre;
         }
 
-        // junta recursos visíveis (não coletados) e memorizados; limpa memorizados já inexistentes
-        private List<int[]> alvosRecursos(Percecao p, int x, int y) {
-            // coords de recursos visíveis agora (fonte de verdade deste turno)
-            Set<String> visiveisAgora = new HashSet<>();
+        // candidatos de recurso = memorizados + visíveis agora (união, sem duplicados)
+        private List<int[]> alvosRecursos(Percecao p) {
+            Set<String> candidatos = new LinkedHashSet<>(recursosConhecidos);
             if (p.getRecursos_no_mundo() != null) {
                 for (Recurso rec : p.getRecursos_no_mundo()) {
-                    if (!rec.isColetado()) visiveisAgora.add(chave(rec.getX(), rec.getY()));
+                    if (!rec.isColetado()) candidatos.add(chave(rec.getX(), rec.getY()));
                 }
             }
-
-            // se estou EM CIMA de um memorizado e ele já não é visível -> foi coletado -> descarta
-            String aqui = chave(x, y);
-            if (recursosConhecidos.contains(aqui) && !visiveisAgora.contains(aqui)) {
-                recursosConhecidos.remove(aqui);
-            }
-
-            // candidatos = união de memorizados + visíveis agora
-            Set<String> candidatos = new LinkedHashSet<>(recursosConhecidos);
-            candidatos.addAll(visiveisAgora);
-
             List<int[]> alvos = new ArrayList<>();
             for (String c : candidatos) {
-                String[] partes = c.split(",");
-                alvos.add(new int[]{ Integer.parseInt(partes[0]), Integer.parseInt(partes[1]) });
+                int[] xy = parseChaveInt(c);
+                alvos.add(xy);
             }
             return alvos;
         }
 
-        // recursos ainda não coletados
-        private List<int[]> recursosVisiveis(Percecao p) {
-            List<int[]> r = new ArrayList<>();
-            if (p.getRecursos_no_mundo() == null) return r;
-            for (Recurso rec : p.getRecursos_no_mundo()) {
-                if (!rec.isColetado()) r.add(new int[]{rec.getX(), rec.getY()});
-            }
-            return r;
+        // "x,y" -> int[]{x,y}
+        private int[] parseChaveInt(String c) {
+            String[] p = c.split(",");
+            return new int[]{ Integer.parseInt(p[0]), Integer.parseInt(p[1]) };
         }
 
         // cofres que não estão na lista negra
@@ -187,7 +176,8 @@ import java.util.LinkedHashSet;
             return Math.abs(x1 - x2) + Math.abs(y1 - y2);
         }
 
-        // entre as ações válidas, a que mais aproxima do alvo; desempate pela casa mais fria
+        // entre as ações válidas, a que mais aproxima do alvo, nunca entrando em muro conhecido.
+        // Desempate pela casa mais fria. Devolve null se nenhum passo aproxima -> fallback heatmap.
         private String passoParaAlvo(List<String> validas, int x, int y, int[] alvo) {
             int distAtual = manhattan(x, y, alvo[0], alvo[1]);
             String melhor = null;
@@ -195,31 +185,29 @@ import java.util.LinkedHashSet;
             int melhorVisitas = Integer.MAX_VALUE;
             for (String acao : validas) {
                 int[] d = destino(acao, x, y);
+                if (murosConhecidos.contains(chave(d[0], d[1]))) continue; // nunca ir para muro conhecido
                 int dist = manhattan(d[0], d[1], alvo[0], alvo[1]);
-                if (dist >= distAtual) continue; // só passos que APROXIMAM (estrito)
+                if (dist >= distAtual) continue; // só passos que aproximam
                 int visitas = historicoVisitas.getOrDefault(chave(d[0], d[1]), 0);
                 if (dist < melhorDist || (dist == melhorDist && visitas < melhorVisitas)) {
-                    melhorDist = dist;
-                    melhorVisitas = visitas;
-                    melhor = acao;
+                    melhorDist = dist; melhorVisitas = visitas; melhor = acao;
                 }
             }
-            return melhor; // null se muro impede aproximar -> fallback mapa de calor
+            return melhor;
         }
 
         // bloco adjacente mais frio (comportamento base de exploração)
         private String passoMaisFrio(List<String> validas, int x, int y) {
-            String melhor = validas.get(0);
+            String melhor = null;
             int menorVisitas = Integer.MAX_VALUE;
             for (String acao : validas) {
                 int[] d = destino(acao, x, y);
+                if (murosConhecidos.contains(chave(d[0], d[1]))) continue; // evita muro memorizado
                 int visitas = historicoVisitas.getOrDefault(chave(d[0], d[1]), 0);
-                if (visitas < menorVisitas) {
-                    menorVisitas = visitas;
-                    melhor = acao;
-                }
+                if (visitas < menorVisitas) { menorVisitas = visitas; melhor = acao; }
             }
-            return melhor;
+            // se todas as válidas caírem em muro conhecido (raro), usa a 1ª válida como último recurso
+            return (melhor != null) ? melhor : validas.get(0);
         }
 
     // Remove as intenções cujo destino colide com um muro (objetos_fixos).
@@ -243,11 +231,6 @@ import java.util.LinkedHashSet;
         }
         return validas;
     }
-
-    // expõe o mapa de calor apenas para leitura (o painel desenha, não altera)
-        public Map<String, Integer> getHistoricoVisitas() {
-            return Collections.unmodifiableMap(historicoVisitas);
-        }
 
     // True se algum objeto_fixo ocupa a coordenada dada.
     private boolean haMuro(Percecao p, int x, int y) {
