@@ -5,8 +5,12 @@ public final class Configuracao {
     private Configuracao() {}
 
     public static final String URL_BASE  = "https://arena.pmonteiro.ovh";
-    public static final String ROOM_ID = "93A635"; // id da sala gerada (muda por sessão)
-    public static final String ROBOT_ID  = "Alfa";
+    public static final String ROOM_ID = "AFEEEA"; // id da sala gerada (muda por sessão)
+    public static final String ROBOT_ID  = "1";
+
+    // modo de jogo: true = Batalha (combate on), false = Missão (combate off)
+    // editar manualmente conforme a sala de teste até o menu existir
+    public static final boolean MODO_BATALHA = false;
 
     // Física (Secção 7 — confirmada no enunciado).
     public static final int HP_INICIAL = 200;

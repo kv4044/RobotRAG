@@ -38,7 +38,7 @@ import java.util.LinkedHashSet;
     // combate só ativa em Batalha (o modo vem do menu de config, não da API)
     private final boolean modoBatalha;
 
-    public MotorHeuristico() {
+    public MotorHeuristico(boolean modoBatalha) {
         this.modoBatalha = modoBatalha;
     }
 

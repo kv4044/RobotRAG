@@ -13,7 +13,8 @@ import javax.swing.JFrame;
 public class AgenteExplorador {
 
     private final ArenaClient arena = new ArenaClient(Configuracao.URL_BASE);
-    private final MotorHeuristico cerebro = new MotorHeuristico();
+
+    private MotorHeuristico cerebro;
 
     // PLACEHOLDER TEMPORÁRIO — substituir pela integração RAG+/unlock do Kaiky.
     // Simula sempre {"status":"falha"} para o robô marcar o cofre e sair, evitando o loop.
@@ -29,6 +30,9 @@ public class AgenteExplorador {
     }
 
     public void correr() throws Exception {
+        // modo definido no arranque (imutável durante a partida) -> passado ao cérebro por construtor
+        cerebro = new MotorHeuristico(Configuracao.MODO_BATALHA);
+
         RespostaRegisto reg = arena.registar(Configuracao.ROOM_ID, Configuracao.ROBOT_ID);
         System.out.println("Registado em (" + reg.getEstado().getX() + ","
                 + reg.getEstado().getY() + ") energia=" + reg.getEstado().getEnergia());
