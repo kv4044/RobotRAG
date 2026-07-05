@@ -82,9 +82,14 @@ public class AgenteExplorador {
                             + " -> " + acao);
 
                 }
-                // atualiza o desenho com a posição atual do robô (dispara repaint interno)
-                painel.atualizar(p.getO_meu_estado().getX(), p.getO_meu_estado().getY());
-
+                
+                // no fim de cada ciclo Sense-Think-Act:
+                painel.atualizar(
+                        p.getO_meu_estado().getX(),
+                        p.getO_meu_estado().getY(),
+                        p.getRecursos_no_mundo(),
+                        p.getCofres_no_mundo()
+                );
             } catch (Exception e) {
                 // Resiliência: timeouts/micro-cortes não derrubam o agente.
                 System.out.println("Falha no turno (a retomar): " + e.getMessage());

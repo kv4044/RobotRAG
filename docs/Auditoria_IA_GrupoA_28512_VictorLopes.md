@@ -2320,21 +2320,253 @@ Confirma os pontos 1 e 2 e responde às duas decisões, e escrevo o código.
 
 **PROMPT**
 
-
+      alguns pontos para ter salvo sempre que mandar os proximos codigos: meu DTO se chama Percecao; ao referenciar o que chama de motor se chama na verdade cerebro; Robo ja esta funcionando bem esta indo para os outros pontos porem ele ta indo sempre que ve energia no campo de visão a ela mesmo que tenha bastante energia deveria apenas se tiver pouca energia e poderia lembrar sua posição para ir quando necessario, o mapa de calor preciso ter uma ui melhor marcar onde esta o cofre e os recursos com uma cor amarela para o cofre e verde para recurso e os quadrados ja andanados em vez de ter cor que muda coloca uma cor unica e dentro do quadrdo ter um numero com o valor dele
 
 **RESPOSTA**
-
-
+      
+      Instrução base recebida. Anotado para os próximos códigos: DTO = `Percecao`; o "motor" chama-se `cerebro` (instância de `MotorHeuristico`). Vou usar estes nomes.
+      
+      Classifico o pedido: tudo navegação/memória/UI — **meu** domínio, sem cruzar o Kaiky. Três mudanças pedidas. Uma delas exige uma decisão que não vou supor.
+      
+      **1. Recurso só atrai com HP baixo + memorizar posição.** Hoje o `escolherAlvo` atrai a recurso sempre que visível. Mudança: recurso só atrai se HP ≤ 50; caso contrário ignora-o para atração mas **memoriza** a coordenada para lá voltar quando precisar. Isto muda o comportamento que confirmaste antes ("qualquer alvo visível atrai") — confirmo que agora queres recurso **só** com HP ≤ 50, e cofre atrai sempre (exceto falhados). Certo?
+      
+      **Ponto que preciso de fechar antes de codificar a memória de recursos:** um recurso memorizado pode já ter sido **coletado** (por ti ou por outro robô) quando lá voltares — e some da sala. Como não há forma de confirmar à distância se ainda existe, proponho: ao chegar à coordenada memorizada, se `recursos_no_mundo` já não a listar, descarto-a e sigo. Concordas com esta limpeza, ou preferes outro critério?
+      
+      **2 e 3. UI do painel:** cor única para casas andadas + número da contagem lá dentro; cofre amarelo, recurso verde. Isto obriga o painel a **receber** as listas de recursos e cofres. Como o painel é só-desenho (SRP), o `AgenteExplorador` passa-lhe essas listas a cada ciclo via `atualizar(...)`. Preciso de confirmar **uma** coisa: o getter da lista no teu `Percecao` — é `getRecursos_no_mundo()` e `getCofres_no_mundo()` (pela tua convenção de nome-literal)? Confirma para eu chamar certo.
+      
+      Enquanto confirmas 1 e 2, deixo já o que **não** depende dessas respostas — a nova memória de recursos no `cerebro` (`MotorHeuristico`):
+      
+      **`MotorHeuristico` — campo e API de memória de recursos:**
+      
+      ```java
+      import java.util.LinkedHashSet;
+      // ... restantes imports
+      
+      // coordenadas de recursos já vistos, para lá voltar quando o HP estiver baixo.
+      // LinkedHashSet: sem duplicados e mantém ordem de descoberta (determinístico p/ auditoria).
+      private final Set<String> recursosConhecidos = new LinkedHashSet<>();
+      ```
+      
+      E dentro de `decidirAcao`, ao inÍcio (depois de ler x,y,hp), memorizar todos os recursos visíveis não coletados:
+      
+      ```java
+      // memoriza recursos visíveis (não coletados) para regresso futuro com HP baixo
+      if (p.getRecursos_no_mundo() != null) {
+          for (Recurso rec : p.getRecursos_no_mundo()) {
+              if (!rec.isColetado()) {
+                  recursosConhecidos.add(chave(rec.getX(), rec.getY()));
+              }
+          }
+      }
+      ```
+      
+      A alteração ao `escolherAlvo` (recurso só com HP ≤ 50, incluindo recursos **memorizados** e não só os visíveis) e a limpeza de recursos já coletados dependem da tua resposta ao critério de limpeza — por isso não a escrevo ainda.
+      
+      Responde a: (1) recurso só atrai com HP ≤ 50 e cofre sempre — confirmado? critério de limpeza do recurso memorizado — aceite? (2) getters `getRecursos_no_mundo()`/`getCofres_no_mundo()` corretos? Com isto escrevo o `escolherAlvo` atualizado e o `PainelMapaCalor` novo (cor única + número + amarelo/verde).
 
 ---
 
 **PROMPT**
 
-
+      sim pode descartar ao chegar e não existir mais;  exato são esses nomes o recurso e cofre getters
 
 **RESPOSTA**
 
-
+      Instrução base recebida na íntegra. Confirmações registadas: DTO `Percecao`; instância `cerebro`; getters `getRecursos_no_mundo()` / `getCofres_no_mundo()`; recurso atrai só com HP ≤ 50 (cofre atrai sempre exceto falhados); recurso memorizado descartado ao chegar se já não existir.
+      
+      Classificação: navegação/memória/UI — domínio do utilizador, sem cruzar o Kaiky.
+      
+      **1. `MotorHeuristico` — `escolherAlvo` atualizado (recurso só com HP ≤ 50, usa recursos memorizados; cofre atrai sempre):**
+      
+      ```java
+      // devolve as coords do alvo, ou null se nada a atrair.
+      // Regra: cofre atrai sempre (exceto falhados). Recurso só quando HP <= 50.
+      private int[] escolherAlvo(Percecao p, int x, int y, int hp) {
+          int[] cofre = maisProximo(cofresVisiveis(p), x, y);
+      
+          // com HP suficiente: só cofres importam
+          if (hp > 50) return cofre;
+      
+          // HP <= 50: recursos entram na jogada (visíveis + memorizados)
+          int[] recurso = maisProximo(alvosRecursos(p, x, y), x, y);
+      
+          // sobrevivência primeiro: se há recurso, prioriza-o sobre o cofre
+          if (recurso != null) return recurso;
+          return cofre;
+      }
+      
+      // junta recursos visíveis (não coletados) e memorizados; limpa memorizados já inexistentes
+      private List<int[]> alvosRecursos(Percecao p, int x, int y) {
+          // coords de recursos visíveis agora (fonte de verdade deste turno)
+          Set<String> visiveisAgora = new HashSet<>();
+          if (p.getRecursos_no_mundo() != null) {
+              for (Recurso rec : p.getRecursos_no_mundo()) {
+                  if (!rec.isColetado()) visiveisAgora.add(chave(rec.getX(), rec.getY()));
+              }
+          }
+      
+          // se estou EM CIMA de um memorizado e ele já não é visível -> foi coletado -> descarta
+          String aqui = chave(x, y);
+          if (recursosConhecidos.contains(aqui) && !visiveisAgora.contains(aqui)) {
+              recursosConhecidos.remove(aqui);
+          }
+      
+          // candidatos = união de memorizados + visíveis agora
+          Set<String> candidatos = new LinkedHashSet<>(recursosConhecidos);
+          candidatos.addAll(visiveisAgora);
+      
+          List<int[]> alvos = new ArrayList<>();
+          for (String c : candidatos) {
+              String[] partes = c.split(",");
+              alvos.add(new int[]{ Integer.parseInt(partes[0]), Integer.parseInt(partes[1]) });
+          }
+          return alvos;
+      }
+      ```
+      
+      Nota: a memorização em si (o `recursosConhecidos.add(...)` no início de `decidirAcao`) já te passei antes — confirma que está colado. A limpeza "descarta ao chegar e já não existir" está no `alvosRecursos` acima, conforme aprovaste.
+      
+      Decisão (auditoria): recurso memorizado só é descartado quando o robô **está na coordenada** e o recurso não aparece nos visíveis — evita apagar por engano um recurso que apenas saiu do raio de visão (oclusão/distância).
+      
+      **2. `PainelMapaCalor` — nova UI (cor única + número da contagem; cofre amarelo, recurso verde).**
+      
+      O painel passa a receber as listas de recursos e cofres. Assinatura de `atualizar` muda.
+      
+      ```java
+      package org.example.ui;
+      
+      import javax.swing.JPanel;
+      import java.awt.Color;
+      import java.awt.Font;
+      import java.awt.Graphics;
+      import java.awt.Graphics2D;
+      import java.util.List;
+      import java.util.Map;
+      import org.example.modelo.Recurso;
+      import org.example.modelo.Cofre;
+      
+      // Só desenha (SRP). Recebe o mapa de calor (leitura), a posição do robô,
+      // e as listas de recursos/cofres visíveis do turno.
+      public class PainelMapaCalor extends JPanel {
+      
+          private final Map<String, Integer> historicoVisitas;
+          private int xRobo = 0;
+          private int yRobo = 0;
+          private List<Recurso> recursos;
+          private List<Cofre> cofres;
+      
+          // cor única para casas andadas (o "calor" agora é o número, não a cor)
+          private static final Color COR_ANDADA = new Color(60, 90, 160);
+      
+          public PainelMapaCalor(Map<String, Integer> historicoVisitas) {
+              this.historicoVisitas = historicoVisitas;
+              setBackground(Color.BLACK);
+          }
+      
+          // chamado pelo AgenteExplorador no fim de cada ciclo
+          public void atualizar(int x, int y, List<Recurso> recursos, List<Cofre> cofres) {
+              this.xRobo = x;
+              this.yRobo = y;
+              this.recursos = recursos;
+              this.cofres = cofres;
+              repaint();
+          }
+      
+          @Override
+          protected void paintComponent(Graphics g) {
+              super.paintComponent(g);
+              Graphics2D g2 = (Graphics2D) g;
+      
+              // 1) dimensões dinâmicas da grelha
+              int maxX = xRobo;
+              int maxY = yRobo;
+              for (String k : historicoVisitas.keySet()) {
+                  int[] c = parseChave(k);
+                  if (c[0] > maxX) maxX = c[0];
+                  if (c[1] > maxY) maxY = c[1];
+              }
+              // inclui recursos/cofres no cálculo para caberem sempre
+              if (recursos != null) for (Recurso r : recursos) { if (r.getX() > maxX) maxX = r.getX(); if (r.getY() > maxY) maxY = r.getY(); }
+              if (cofres != null)   for (Cofre c : cofres)     { if (c.getX() > maxX) maxX = c.getX(); if (c.getY() > maxY) maxY = c.getY(); }
+      
+              int colunas = maxX + 1;
+              int linhas = maxY + 1;
+              int lado = Math.min(getWidth() / colunas, getHeight() / linhas);
+              if (lado < 1) lado = 1;
+      
+              // 2) casas andadas: cor única + número da contagem no centro
+              g2.setFont(new Font("Monospaced", Font.BOLD, Math.max(8, lado / 3)));
+              for (Map.Entry<String, Integer> e : historicoVisitas.entrySet()) {
+                  int[] c = parseChave(e.getKey());
+                  int px = c[0] * lado;
+                  int py = (linhas - 1 - c[1]) * lado; // Y invertido
+                  g2.setColor(COR_ANDADA);
+                  g2.fillRect(px, py, lado, lado);
+                  // número da contagem centrado
+                  g2.setColor(Color.WHITE);
+                  String txt = String.valueOf(e.getValue());
+                  int tw = g2.getFontMetrics().stringWidth(txt);
+                  int th = g2.getFontMetrics().getAscent();
+                  g2.drawString(txt, px + (lado - tw) / 2, py + (lado + th) / 2);
+              }
+      
+              // 3) recursos (verde) por cima da grelha
+              if (recursos != null) {
+                  g2.setColor(Color.GREEN);
+                  for (Recurso r : recursos) {
+                      if (r.isColetado()) continue;
+                      int px = r.getX() * lado;
+                      int py = (linhas - 1 - r.getY()) * lado;
+                      g2.fillRect(px, py, lado, lado);
+                  }
+              }
+      
+              // 4) cofres (amarelo)
+              if (cofres != null) {
+                  g2.setColor(Color.YELLOW);
+                  for (Cofre c : cofres) {
+                      int px = c.getX() * lado;
+                      int py = (linhas - 1 - c.getY()) * lado;
+                      g2.fillRect(px, py, lado, lado);
+                  }
+              }
+      
+              // 5) linhas da grelha
+              g2.setColor(new Color(40, 40, 40));
+              for (int i = 0; i <= colunas; i++) g2.drawLine(i * lado, 0, i * lado, linhas * lado);
+              for (int j = 0; j <= linhas; j++) g2.drawLine(0, j * lado, colunas * lado, j * lado);
+      
+              // 6) robô (ciano) por cima de tudo
+              g2.setColor(Color.CYAN);
+              g2.fillOval(xRobo * lado, (linhas - 1 - yRobo) * lado, lado, lado);
+          }
+      
+          private int[] parseChave(String chave) {
+              String[] partes = chave.split(",");
+              return new int[]{ Integer.parseInt(partes[0]), Integer.parseInt(partes[1]) };
+          }
+      }
+      ```
+      
+      **3. `AgenteExplorador` — chamada de `atualizar` atualizada (nova assinatura):**
+      
+      ```java
+      // no fim de cada ciclo Sense-Think-Act:
+      painel.atualizar(
+          p.getO_meu_estado().getX(),
+          p.getO_meu_estado().getY(),
+          p.getRecursos_no_mundo(),
+          p.getCofres_no_mundo()
+      );
+      ```
+      
+      Notas:
+      - **Ordem de desenho** (andadas → recursos → cofres → robô): garante que o robô fica sempre visível por cima, e que recurso/cofre não são tapados pelo azul das casas andadas.
+        - **Número = contagem de visitas**: substitui a escala de cor anterior. Casa andada = azul único com o valor lá dentro; casa não-andada = fundo preto (valor 0 implícito, sem desenho).
+        - **Recurso coletado** (`isColetado()`) não é desenhado — coerente com a atração que também o ignora.
+        - A fonte escala com o tamanho da célula (`lado/3`) para o número caber quando a grelha cresce.
+      
+      Pendente inalterado: `cofresFalhados` continua a ser populado pelo placeholder; quando o `/unlock` real do Kaiky entrar, troca-se só a origem da marcação.
 
 ---
 

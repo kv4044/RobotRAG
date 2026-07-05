@@ -13,6 +13,7 @@ import java.util.Set;
 import java.util.HashSet;
 import org.example.modelo.Recurso;
 import org.example.modelo.Cofre;
+import java.util.LinkedHashSet;
 
     // Cérebro determinístico. Decide a ação SOZINHO. Não faz HTTP/UI/Ollama.
     public class MotorHeuristico {
@@ -47,6 +48,10 @@ import org.example.modelo.Cofre;
         // mapa de calor: chave "x,y" -> nº de vezes que o robô pisou essa coordenada
         private final Map<String, Integer> historicoVisitas = new HashMap<>();
 
+        // coordenadas de recursos já vistos, para lá voltar quando o HP estiver baixo.
+        // LinkedHashSet: sem duplicados e mantém ordem de descoberta (determinístico p/ auditoria).
+        private final Set<String> recursosConhecidos = new LinkedHashSet<>();
+
         // coordenadas de cofres já falhados; populado na Fase 5 (após confirmar o status do /unlock no Swagger)
         private final Set<String> cofresFalhados = new HashSet<>();
 
@@ -73,6 +78,15 @@ import org.example.modelo.Cofre;
             int y = p.getO_meu_estado().getY();
             int hp = p.getO_meu_estado().getEnergia();
 
+            // memoriza recursos visíveis (não coletados) para regresso futuro com HP baixo
+            if (p.getRecursos_no_mundo() != null) {
+                for (Recurso rec : p.getRecursos_no_mundo()) {
+                    if (!rec.isColetado()) {
+                        recursosConhecidos.add(chave(rec.getX(), rec.getY()));
+                    }
+                }
+            }
+
             // mapa de calor: regista a passagem pela casa atual (casa andada = valor >=1; não andada = 0)
             historicoVisitas.merge(chave(x, y), 1, Integer::sum);
 
@@ -92,20 +106,48 @@ import org.example.modelo.Cofre;
             return passoMaisFrio(validas, x, y);
         }
 
-        // devolve as coords do alvo mais atrativo, ou null se nenhum visível
+        // devolve as coords do alvo, ou null se nada a atrair.
+// Regra: cofre atrai sempre (exceto falhados). Recurso só quando HP <= 50.
         private int[] escolherAlvo(Percecao p, int x, int y, int hp) {
-            int[] recurso = maisProximo(recursosVisiveis(p), x, y);
             int[] cofre = maisProximo(cofresVisiveis(p), x, y);
 
-            // com HP <= 50, sobrevivência primeiro: prioriza recurso se existir
-            if (hp <= 50 && recurso != null) return recurso;
+            // com HP suficiente: só cofres importam
+            if (hp > 50) return cofre;
 
-            // caso geral: qualquer alvo visível atrai; escolhe o mais próximo por Manhattan
-            if (recurso == null) return cofre;
-            if (cofre == null) return recurso;
-            int dR = manhattan(x, y, recurso[0], recurso[1]);
-            int dC = manhattan(x, y, cofre[0], cofre[1]);
-            return (dR <= dC) ? recurso : cofre;
+            // HP <= 50: recursos entram na jogada (visíveis + memorizados)
+            int[] recurso = maisProximo(alvosRecursos(p, x, y), x, y);
+
+            // sobrevivência primeiro: se há recurso, prioriza-o sobre o cofre
+            if (recurso != null) return recurso;
+            return cofre;
+        }
+
+        // junta recursos visíveis (não coletados) e memorizados; limpa memorizados já inexistentes
+        private List<int[]> alvosRecursos(Percecao p, int x, int y) {
+            // coords de recursos visíveis agora (fonte de verdade deste turno)
+            Set<String> visiveisAgora = new HashSet<>();
+            if (p.getRecursos_no_mundo() != null) {
+                for (Recurso rec : p.getRecursos_no_mundo()) {
+                    if (!rec.isColetado()) visiveisAgora.add(chave(rec.getX(), rec.getY()));
+                }
+            }
+
+            // se estou EM CIMA de um memorizado e ele já não é visível -> foi coletado -> descarta
+            String aqui = chave(x, y);
+            if (recursosConhecidos.contains(aqui) && !visiveisAgora.contains(aqui)) {
+                recursosConhecidos.remove(aqui);
+            }
+
+            // candidatos = união de memorizados + visíveis agora
+            Set<String> candidatos = new LinkedHashSet<>(recursosConhecidos);
+            candidatos.addAll(visiveisAgora);
+
+            List<int[]> alvos = new ArrayList<>();
+            for (String c : candidatos) {
+                String[] partes = c.split(",");
+                alvos.add(new int[]{ Integer.parseInt(partes[0]), Integer.parseInt(partes[1]) });
+            }
+            return alvos;
         }
 
         // recursos ainda não coletados
