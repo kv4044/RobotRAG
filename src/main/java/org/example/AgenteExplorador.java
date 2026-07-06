@@ -9,40 +9,59 @@ import org.example.rag.MotorRAGImpl;
 import org.example.rag.RespostaRAG;
 import org.example.rede.ArenaClient;
 import org.example.rede.OllamaClient;
-import org.example.ui.PainelMapaCalor;
+import org.example.ui.*;
 
 import javax.swing.JFrame;
 
 // Loop Sense-Think-Act 100% autónomo. Só orquestra e delega.
 public class AgenteExplorador {
 
-    private final ArenaClient arena = new ArenaClient(Configuracao.URL_BASE);
     private final MotorRAG motorRAG = new MotorRAGImpl(new OllamaClient());
+
+    // cofres cujo enigma já foi resolvido pelo RAG neste jogo (evita re-correr o LLM na mesma casa)
+    private final java.util.Set<String> enigmasResolvidos = new java.util.HashSet<>();
 
     private boolean manualIngerido = false;
 
+    private final Configuracao config;
+    private final ArenaClient arena;
     private MotorHeuristico cerebro;
 
+    // construtor recebe a config vinda do menu
+
+
     public static void main(String[] args) throws Exception {
-        new AgenteExplorador().correr();
+        MenuConfiguracao menu = new MenuConfiguracao();
+        if (!menu.mostrar()) {
+            System.out.println("Configuração cancelada. A sair.");
+            return;
+        }
+        Configuracao config = new Configuracao(
+                menu.getRoomId(), menu.getRobotId(), menu.isModoBatalha());
+        new AgenteExplorador(config).correr();
+    }
+
+    public AgenteExplorador(Configuracao config) {
+        this.config = config;
+        this.arena = new ArenaClient(Configuracao.URL_BASE); // URL_BASE continua estático
     }
 
     public void correr() throws Exception {
-        cerebro = new MotorHeuristico(Configuracao.MODO_BATALHA);
+        cerebro = new MotorHeuristico(config.isModoBatalha());
 
-        RespostaRegisto reg = arena.registar(Configuracao.ROOM_ID, Configuracao.ROBOT_ID);
+        RespostaRegisto reg = arena.registar(config.getRoomId(), config.getRobotId());
         System.out.println("Registado em (" + reg.getEstado().getX() + ","
                 + reg.getEstado().getY() + ") energia=" + reg.getEstado().getEnergia());
 
-        motorRAG.ingerirManual(arena.descarregarManual(Configuracao.ROOM_ID));
-        System.out.println("Manual ingerido: " + Configuracao.ROOM_ID);
+        motorRAG.ingerirManual(arena.descarregarManual(config.getRoomId()));
+        System.out.println("Manual ingerido: " + config.getRoomId());
 
         PainelMapaCalor painel = new PainelMapaCalor(
                 cerebro.getHistoricoVisitas(),
                 cerebro.getMurosConhecidos(),
                 cerebro.getRecursosConhecidos(),
-                cerebro.getCofresFalhados(),
-                cerebro.getCofresConhecidos(),
+                cerebro.getCofresConhecidos(),   // <- conhecidos primeiro (bate com o construtor)
+                cerebro.getCofresFalhados(),     // <- falhados depois
                 cerebro.getCelulasVistas()
         );
 
@@ -55,7 +74,7 @@ public class AgenteExplorador {
         while (true) {
             try {
                 // SENSE
-                Percecao p = arena.perceber(Configuracao.ROOM_ID, Configuracao.ROBOT_ID);
+                Percecao p = arena.perceber(config.getRoomId(), config.getRobotId());
 
                 if (p.isGame_over()) {
                     System.out.println("Jogo terminado. A desligar motores.");
@@ -66,9 +85,9 @@ public class AgenteExplorador {
                     // FORA do cronómetro de 10 min (7.1: relógio só arranca no sinal de início).
                     if (!manualIngerido) {
                         try {
-                            motorRAG.ingerirManual(arena.descarregarManual(Configuracao.ROOM_ID));
+                            motorRAG.ingerirManual(arena.descarregarManual(config.getRoomId()));
                             manualIngerido = true; // só marca APÓS sucesso -> falha re-tenta no próximo turno
-                            System.out.println("Manual ingerido no lobby (" + Configuracao.ROOM_ID + ").");
+                            System.out.println("Manual ingerido no lobby (" + config.getRoomId() + ").");
                         } catch (Exception e) {
                             System.out.println("Ingestão falhou, re-tenta próximo turno: " + e.getMessage());
                         }
@@ -77,48 +96,41 @@ public class AgenteExplorador {
                     continue;
                 }
 
-                // --- Deteção de cofre e tentativa real de desbloqueio (pipeline RAG) ---
+                // --- Deteção de cofre e desbloqueio (não consome o turno de movimento) ---
                 Cofre cofreActual = cerebro.cofreSobActual(p);
                 if (cofreActual != null && motorRAG.estaPronto()) {
-                    RespostaRAG r = motorRAG.resolverEnigma(cofreActual.getTerminal_desafio());
-
-                    if (r.deveSubmeter()) {
-                        String st = arena.desbloquear(
-                                Configuracao.ROOM_ID, Configuracao.ROBOT_ID,
-                                r.getChaveFinal(), r.getChunkFinal(), r.getRespostaBrutaLLMFinal());
-
-                        switch (st) {
-                            case "sucesso":
-                                // body "null" -> bau desapareceu, +100HP.
-                                // ⚠️ registarCofreResolvido NÃO existe no MotorHeuristico (módulo Victor).
-                                // Fallback provisório: usa registarCofreFalhado para parar a atração
-                                // (pinta cofre a vermelho "F" — trocar por registarCofreResolvido depois).
-                                cerebro.registarCofreFalhado(cofreActual.getX(), cofreActual.getY());
-                                break;
-                            case "falha":
-                                cerebro.registarCofreFalhado(cofreActual.getX(), cofreActual.getY());
-                                break;
-                            case "bloqueado":
-                                pausar(); pausar(); // anti-flood: NÃO blacklist, reenvia próximo turno
-                                break;
-                            case "erro":
-                                System.out.println("Unlock dessincronizado (erro).");
-                                break;
-                            default:
-                                System.out.println("Unlock status inesperado: " + st);
+                    String kCofre = cofreActual.getX() + "," + cofreActual.getY();
+                    if (!enigmasResolvidos.contains(kCofre)) {   // só processa o enigma UMA vez por cofre
+                        enigmasResolvidos.add(kCofre);           // marca já, antes de resolver, para não repetir
+                        RespostaRAG r = motorRAG.resolverEnigma(cofreActual.getTerminal_desafio());
+                        if (r.deveSubmeter()) {
+                            String st = arena.desbloquear(config.getRoomId(), config.getRobotId(),
+                                    r.getChaveFinal(), r.getChunkFinal(), r.getRespostaBrutaLLMFinal());
+                            switch (st) {
+                                case "sucesso":
+                                    cerebro.registarCofreResolvido(cofreActual.getX(), cofreActual.getY());
+                                    break;
+                                case "falha":
+                                    cerebro.registarCofreFalhado(cofreActual.getX(), cofreActual.getY());
+                                    break;
+                                case "bloqueado":
+                                    // anti-flood: reenvia próximo turno; remove a marca para re-tentar o SUBMIT (não o LLM)
+                                    enigmasResolvidos.remove(kCofre);
+                                    break;
+                                default:
+                                    System.out.println("Unlock status: " + st);
+                            }
+                        } else {
+                            cerebro.registarCofreFalhado(cofreActual.getX(), cofreActual.getY());
                         }
-                    } else {
-                        // RAG sem chave fiável -> blacklist para não queimar -10HP a adivinhar
-                        cerebro.registarCofreFalhado(cofreActual.getX(), cofreActual.getY());
                     }
                 }
+                // NÃO há continue/return aqui: o turno segue para decidir e mover normalmente
 
-                // THINK
+                // THINK + ACT no MESMO turno (o robô não fica parado por ter aberto o cofre)
                 String acao = cerebro.decidirAcao(p);
-
-                // ACT
                 if (acao != null) {
-                    arena.agir(Configuracao.ROOM_ID, Configuracao.ROBOT_ID, acao);
+                    arena.agir(config.getRoomId(), config.getRobotId(), acao);
                     System.out.println("Pos=(" + p.getO_meu_estado().getX() + ","
                             + p.getO_meu_estado().getY() + ") HP=" + p.getO_meu_estado().getEnergia()
                             + " -> " + acao);
