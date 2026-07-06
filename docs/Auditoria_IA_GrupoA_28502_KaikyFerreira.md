@@ -1,6 +1,7 @@
 # Auditoria de Utilização de IA
 
-*Aluno:* Kaiky Ferreira — nº 28502
+*Aluno:* Kaiky Vinicius Bego Ferreira — nº 28502
+*Grupo* A 
 
 * Este documento regista as interações que tive com a LLM  
   durante o desenvolvimento do projeto.  
