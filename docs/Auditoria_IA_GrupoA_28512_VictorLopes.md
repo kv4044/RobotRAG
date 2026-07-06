@@ -5345,8 +5345,73 @@ Confirma os pontos 1 e 2 e responde às duas decisões, e escrevo o código.
         ok aparentementet todo o codigo esta ok e funcional preciso fazer commit e dar merge para o main
 
 **RESPOSTA**
-
-
+      
+      Instrução base recebida na íntegra. Autoverificação: fluxo Git (domínio do utilizador; Kaiky terminou e autorizou edição — sem cruzamento pendente); sem código a supor; chat-only; português.
+      
+      Estás em `feature/motor-deterministico-v2`. Antes do commit, dois pontos de higiene que a §9 do enunciado avalia (histórico progressivo e equitativo).
+      
+      **1. Vê o que vais commitar antes de o fazer.**
+      
+      ```
+      git status
+      git diff
+      ```
+      
+      Confirma que só aparecem os ficheiros que mexeste nesta v2 (menu, config instância, motor, painel, agente). Se aparecer algo inesperado (ficheiros de build, `.idea/`, `target/`), não os commites — diz-me e passo-te o `.gitignore`.
+      
+      **2. Commit — de preferência fracionado, não um "commit gigante".**
+      
+      A §9 penaliza um único commit enorme. Como fizeste várias coisas distintas (menu, config, correção de cofres, combate), separa em commits lógicos:
+      
+      ```
+      git add src/main/java/org/example/ui/MenuConfiguracao.java src/main/java/org/example/Configuracao.java
+      git commit -m "Feat: menu inicial de configuracao (sala, robo, modo) + Configuracao como instancia"
+      
+      git add src/main/java/org/example/heuristica/MotorHeuristico.java
+      git commit -m "Fix: cofres resolvidos banidos permanentemente (desenho/atracao/re-unlock)"
+      
+      git add src/main/java/org/example/ui/PainelMapaCalor.java src/main/java/org/example/AgenteExplorador.java
+      git commit -m "Fix: ordem de parametros do painel + combate por HP e limiar de recurso 230"
+      ```
+      
+      Ajusta os caminhos ao teu layout real (`git status` mostra-os). Se preferires simplicidade, um commit único também serve, mas fracionado defende-se melhor na auditoria.
+      
+      **3. Publica a v2.**
+      
+      ```
+      git push
+      ```
+      
+      (Já tem upstream desde que a criaste com `--set-upstream`, logo `git push` sozinho chega.)
+      
+      **4. Merge para `main` — via Pull Request, não push direto.**
+      
+      O `main` é protegido. Não faças `git checkout main` + `git merge`. Em vez disso:
+      
+      - Cria a **tag de segurança** em `main` antes (rede de retorno):
+      ```
+      git checkout main
+      git pull origin main
+      git tag pre-merge-v2
+      git push origin pre-merge-v2
+      git checkout feature/motor-deterministico-v2
+      ```
+      
+      - Abre o PR no GitHub: `feature/motor-deterministico-v2 → main`. Revê o diff na interface, e faz merge por lá.
+      
+      **Antes do PR, confirma comigo dois pontos que evitam conflito no merge:**
+      
+      1. **A v2 nasceu do `main` já com o RAG do Kaiky?** Se sim (criaste-a com `git checkout main && git pull` antes do `-b`), o merge não deve colidir com o código dele. Confirma que o bloco `/unlock` do Kaiky está intacto no teu `AgenteExplorador` (não o apagaste ao converter a config para instância — só trocaste as referências `Configuracao.ROOM_ID` por `config.getRoomId()`).
+      
+         2. **Rebase preventivo**, caso o Kaiky tenha commitado algo em `main` desde que abriste a v2:
+      ```
+      git pull origin main --rebase
+      ```
+      Se der conflito, resolve-o **no branch** (como fizeste da última vez com o ficheiro de auditoria), `git add` + `git rebase --continue`, e só depois abre o PR.
+      
+      Ordem final: `git status`/`diff` → commits fracionados → `git push` → tag de segurança → `git pull origin main --rebase` (resolver conflitos se houver) → abrir PR no GitHub → merge.
+      
+      Confirma o ponto 1 (bloco do Kaiky intacto) antes de abrir o PR. Se o `git diff` mostrar algo estranho, cola-o que verifico.
 
 ---
 
