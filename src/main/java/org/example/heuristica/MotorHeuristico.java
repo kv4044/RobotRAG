@@ -139,23 +139,68 @@ import java.util.LinkedHashSet;
             return (rumo != null) ? rumo : passoMaisFrio(validas, x, y);
         }
 
-        // alvos por prioridade de HP:
-        // < 80  -> emergência: recursos + cofres (ambos curam), tudo o que for alcançável
-        // < 200 -> oportunista: só recursos SE visíveis/memorizados; cofres continuam a atrair
-        // = 250 (cheio) -> só cofres (missão)
+        // Remove as intenções cujo destino colide com um muro (objetos_fixos).
+        private List<String> filtrarColisoes(Percecao p) {
+            int x = p.getO_meu_estado().getX();
+            int y = p.getO_meu_estado().getY();
+            List<String> validas = new ArrayList<>();
+
+            for (String intencao : INTENCOES) {
+                int destinoX = x;
+                int destinoY = y;
+                switch (intencao) {
+                    case "MOVER_NORTE": destinoY = y - 1; break;
+                    case "MOVER_SUL":   destinoY = y + 1; break;
+                    case "MOVER_ESTE":  destinoX = x + 1; break;
+                    case "MOVER_OESTE": destinoX = x - 1; break;
+                }
+                if (!haMuro(p, destinoX, destinoY)) {
+                    validas.add(intencao);
+                }
+            }
+            return validas;
+        }
+
+        // combate (§10). Prioridade máxima em Batalha.
+        // - hpMeu > hpRival E hpMeu > 50 -> perseguir/atacar qualquer rival VISÍVEL até ao abate.
+        // - hpMeu <= 50 -> nunca ataca; foge se rival <= 2 blocos.
+        // - rival mais forte -> foge se perto, senão ignora.
+        private String passoCombate(Percecao p, int x, int y, int hp, List<String> validas) {
+            java.util.Map.Entry<String, OutroRobot> alvo = rivalVisivel(p, x, y);
+            if (alvo == null) return null;
+
+            OutroRobot rival = alvo.getValue();
+            int hpRival = rival.getEnergia();
+            int dist = manhattan(x, y, rival.getX(), rival.getY());
+
+            // ATAQUE: só com vantagem de HP e sem estar em zona crítica de energia
+            if (hp > hpRival && hp > 50) {
+                String passo = passoParaAlvoBFS(x, y, new int[]{rival.getX(), rival.getY()}, validas);
+                if (passo != null) return passo;              // rota de abate (contorna muros)
+                return passoExploracao(x, y, validas);        // rival atrás de muro -> aproxima-se
+            }
+
+            // sem condições de ataque: foge se o rival for ameaça imediata
+            if (dist <= 2) {
+                return passoFugaBFS(x, y, rival, validas);
+            }
+            return null; // rival forte/igual mas longe, ou nós fracos e ele longe -> segue missão
+        }
+
+
         private List<int[]> alvosOrdenados(Percecao p, int x, int y, int hp) {
             List<int[]> candidatos = new ArrayList<>();
 
             if (hp < 80) {
-                // emergência de energia: recursos primeiro (curam rápido), depois cofres
+                // emergência: recursos + cofres (ambos curam)
                 candidatos.addAll(alvosRecursos(p));
                 candidatos.addAll(cofresVisiveis(p));
-            } else if (hp < 200) {
-                // oportunista: apanha HP no caminho se houver, mas cofres mantêm-se como objetivo
+            } else if (hp < 230) {
+                // oportunista: apanha HP no caminho (limiar 230 = teto 250 - 20 do recurso)
                 candidatos.addAll(alvosRecursos(p));
                 candidatos.addAll(cofresVisiveis(p));
             } else {
-                // HP no teto: foco em cofres (missão)
+                // HP alto: foco em cofres (missão)
                 candidatos.addAll(cofresVisiveis(p));
             }
 
@@ -178,6 +223,46 @@ import java.util.LinkedHashSet;
                 alvos.add(xy);
             }
             return alvos;
+        }
+
+        // BFS até uma coordenada-alvo, contornando muros conhecidos. Devolve o 1º passo
+        // da rota mais curta, ou null se o alvo for inalcançável (cercado por muros).
+        // Custo uniforme (1 HP/passo) -> BFS dá o caminho mínimo sem A*.
+        private String passoParaAlvoBFS(int roboX, int roboY, int[] alvo, List<String> validas) {
+            String alvoK = chave(alvo[0], alvo[1]);
+            java.util.Deque<int[]> fila = new java.util.ArrayDeque<>();
+            Set<String> visitadosBFS = new HashSet<>();
+            Map<String, String> primeiraAcao = new HashMap<>();
+
+            // arranca pelos vizinhos válidos imediatos (respeitam a colisão do turno)
+            for (String acao : validas) {
+                int[] d = destino(acao, roboX, roboY);
+                String k = chave(d[0], d[1]);
+                if (murosConhecidos.contains(k)) continue;
+                if (visitadosBFS.add(k)) {
+                    fila.add(d);
+                    primeiraAcao.put(k, acao);
+                }
+            }
+
+            while (!fila.isEmpty()) {
+                int[] atual = fila.poll();
+                String kAtual = chave(atual[0], atual[1]);
+
+                if (kAtual.equals(alvoK)) return primeiraAcao.get(kAtual); // chegou ao alvo
+
+                for (String acao : INTENCOES) {
+                    int[] viz = destino(acao, atual[0], atual[1]);
+                    if (viz[0] < 0 || viz[1] < 0) continue;
+                    String kViz = chave(viz[0], viz[1]);
+                    if (murosConhecidos.contains(kViz)) continue;   // nunca atravessa muro
+                    if (visitadosBFS.add(kViz)) {
+                        fila.add(viz);
+                        primeiraAcao.put(kViz, primeiraAcao.get(kAtual)); // propaga ação inicial do ramo
+                    }
+                }
+            }
+            return null; // alvo inalcançável com o que se conhece do mapa
         }
 
         // "x,y" -> int[]{x,y}
@@ -242,203 +327,7 @@ import java.util.LinkedHashSet;
             return null; // sem fronteira alcançável
         }
 
-        // BFS até uma coordenada-alvo, contornando muros conhecidos. Devolve o 1º passo
-        // da rota mais curta, ou null se o alvo for inalcançável (cercado por muros).
-        // Custo uniforme (1 HP/passo) -> BFS dá o caminho mínimo sem A*.
-        private String passoParaAlvoBFS(int roboX, int roboY, int[] alvo, List<String> validas) {
-            String alvoK = chave(alvo[0], alvo[1]);
-            java.util.Deque<int[]> fila = new java.util.ArrayDeque<>();
-            Set<String> visitadosBFS = new HashSet<>();
-            Map<String, String> primeiraAcao = new HashMap<>();
 
-            // arranca pelos vizinhos válidos imediatos (respeitam a colisão do turno)
-            for (String acao : validas) {
-                int[] d = destino(acao, roboX, roboY);
-                String k = chave(d[0], d[1]);
-                if (murosConhecidos.contains(k)) continue;
-                if (visitadosBFS.add(k)) {
-                    fila.add(d);
-                    primeiraAcao.put(k, acao);
-                }
-            }
-
-            while (!fila.isEmpty()) {
-                int[] atual = fila.poll();
-                String kAtual = chave(atual[0], atual[1]);
-
-                if (kAtual.equals(alvoK)) return primeiraAcao.get(kAtual); // chegou ao alvo
-
-                for (String acao : INTENCOES) {
-                    int[] viz = destino(acao, atual[0], atual[1]);
-                    if (viz[0] < 0 || viz[1] < 0) continue;
-                    String kViz = chave(viz[0], viz[1]);
-                    if (murosConhecidos.contains(kViz)) continue;   // nunca atravessa muro
-                    if (visitadosBFS.add(kViz)) {
-                        fila.add(viz);
-                        primeiraAcao.put(kViz, primeiraAcao.get(kAtual)); // propaga ação inicial do ramo
-                    }
-                }
-            }
-            return null; // alvo inalcançável com o que se conhece do mapa
-        }
-
-        // alvo com menor distância de Manhattan; null se lista vazia
-        private int[] maisProximo(List<int[]> alvos, int x, int y) {
-            int[] melhor = null;
-            int menor = Integer.MAX_VALUE;
-            for (int[] a : alvos) {
-                int d = manhattan(x, y, a[0], a[1]);
-                if (d < menor) { menor = d; melhor = a; }
-            }
-            return melhor;
-        }
-
-        private int manhattan(int x1, int y1, int x2, int y2) {
-            return Math.abs(x1 - x2) + Math.abs(y1 - y2);
-        }
-
-        // entre as ações válidas, a que mais aproxima do alvo, nunca entrando em muro conhecido.
-        // Desempate pela casa mais fria. Devolve null se nenhum passo aproxima -> fallback heatmap.
-        private String passoParaAlvo(List<String> validas, int x, int y, int[] alvo) {
-            int distAtual = manhattan(x, y, alvo[0], alvo[1]);
-            String melhor = null;
-            int melhorDist = Integer.MAX_VALUE;
-            int melhorVisitas = Integer.MAX_VALUE;
-            for (String acao : validas) {
-                int[] d = destino(acao, x, y);
-                if (murosConhecidos.contains(chave(d[0], d[1]))) continue; // nunca ir para muro conhecido
-                int dist = manhattan(d[0], d[1], alvo[0], alvo[1]);
-                if (dist >= distAtual) continue; // só passos que aproximam
-                int visitas = historicoVisitas.getOrDefault(chave(d[0], d[1]), 0);
-                if (dist < melhorDist || (dist == melhorDist && visitas < melhorVisitas)) {
-                    melhorDist = dist; melhorVisitas = visitas; melhor = acao;
-                }
-            }
-            return melhor;
-        }
-
-        // bloco adjacente mais frio (comportamento base de exploração)
-        private String passoMaisFrio(List<String> validas, int x, int y) {
-            String melhor = null;
-            int menorVisitas = Integer.MAX_VALUE;
-            for (String acao : validas) {
-                int[] d = destino(acao, x, y);
-                if (murosConhecidos.contains(chave(d[0], d[1]))) continue; // evita muro memorizado
-                int visitas = historicoVisitas.getOrDefault(chave(d[0], d[1]), 0);
-                if (visitas < menorVisitas) { menorVisitas = visitas; melhor = acao; }
-            }
-            // se todas as válidas caírem em muro conhecido (raro), usa a 1ª válida como último recurso
-            return (melhor != null) ? melhor : validas.get(0);
-        }
-
-        // marca em celulasVistas todas as casas dentro do raio 4.5 cuja linha de visão
-        // até ao robô não é cortada por um muro conhecido (oclusão, §7).
-        private void varrerCampoVisao(int roboX, int roboY) {
-            int raio = 4; // 4.5 euclidiano: dx,dy até 4 (5º já excede em qualquer eixo)
-            for (int dx = -raio; dx <= raio; dx++) {
-                for (int dy = -raio; dy <= raio; dy++) {
-                    if (dx * dx + dy * dy > 4.5 * 4.5) continue; // fora do círculo de raio 4.5
-                    int cx = roboX + dx;
-                    int cy = roboY + dy;
-                    if (cx < 0 || cy < 0) continue;              // arena só tem coords positivas
-                    if (temLinhaDeVisao(roboX, roboY, cx, cy)) {
-                        celulasVistas.add(chave(cx, cy));         // inclui a própria casa do muro (é vista)
-                    }
-                }
-            }
-        }
-
-        // linha de visão limpa: nenhum muro conhecido ENTRE o robô e o alvo.
-        // A casa-alvo pode ser muro (vê-se a parede); só bloqueiam muros no caminho, não o destino.
-        private boolean temLinhaDeVisao(int x0, int y0, int x1, int y1) {
-            // amostragem por passos ao longo da reta (DDA simples)
-            int passos = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0));
-            if (passos == 0) return true; // a própria casa do robô
-            double dx = (x1 - x0) / (double) passos;
-            double dy = (y1 - y0) / (double) passos;
-            // percorre pontos intermédios (exclui origem; exclui destino para não auto-bloquear muros-alvo)
-            for (int i = 1; i < passos; i++) {
-                int px = (int) Math.round(x0 + dx * i);
-                int py = (int) Math.round(y0 + dy * i);
-                if (murosConhecidos.contains(chave(px, py))) return false; // muro corta a visão
-            }
-            return true;
-        }
-
-    // Remove as intenções cujo destino colide com um muro (objetos_fixos).
-    private List<String> filtrarColisoes(Percecao p) {
-        int x = p.getO_meu_estado().getX();
-        int y = p.getO_meu_estado().getY();
-        List<String> validas = new ArrayList<>();
-
-        for (String intencao : INTENCOES) {
-            int destinoX = x;
-            int destinoY = y;
-            switch (intencao) {
-                case "MOVER_NORTE": destinoY = y - 1; break;
-                case "MOVER_SUL":   destinoY = y + 1; break;
-                case "MOVER_ESTE":  destinoX = x + 1; break;
-                case "MOVER_OESTE": destinoX = x - 1; break;
-            }
-            if (!haMuro(p, destinoX, destinoY)) {
-                validas.add(intencao);
-            }
-        }
-        return validas;
-    }
-
-    // True se algum objeto_fixo ocupa a coordenada dada.
-    private boolean haMuro(Percecao p, int x, int y) {
-        if (p.getObjetos_fixos() == null) return false;
-        for (ObjetoFixo muro : p.getObjetos_fixos()) {
-            if (muro.getX() == x && muro.getY() == y) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-        // rival mais próximo VISÍVEL (dentro do raio de radar). Usado para perseguição sustentada.
-        // Devolve null fora de Batalha ou sem rivais.
-        private Map.Entry<String, OutroRobot> rivalVisivel(Percecao p, int x, int y) {
-            if (!modoBatalha || p.getOutros_robots() == null) return null;
-            java.util.Map.Entry<String, OutroRobot> maisPerto = null;
-            int menor = Integer.MAX_VALUE;
-            for (java.util.Map.Entry<String, OutroRobot> e : p.getOutros_robots().entrySet()) {
-                OutroRobot r = e.getValue();
-                int d = manhattan(x, y, r.getX(), r.getY());
-                if (d < menor) { menor = d; maisPerto = e; }
-            }
-            return maisPerto; // o servidor só devolve rivais dentro do radar -> já estão visíveis
-        }
-
-        // decisão de combate (§10). Prioridade máxima em Batalha.
-        // - rival com MENOS HP que o nosso e visível -> perseguir/atacar até ao abate (nunca foge).
-        // - rival com HP >= o nosso e a <= 2 blocos -> fugir (Nível 2, BFS).
-        // - caso contrário -> null (segue a missão).
-        private String passoCombate(Percecao p, int x, int y, int hp, List<String> validas) {
-            java.util.Map.Entry<String, OutroRobot> alvo = rivalVisivel(p, x, y);
-            if (alvo == null) return null;
-
-            OutroRobot rival = alvo.getValue();
-            int hpRival = rival.getEnergia();
-            int dist = manhattan(x, y, rival.getX(), rival.getY());
-
-            if (hp > hpRival) {
-                // ABATE: enquanto visível e mais fraco, persegue com BFS (contorna muros).
-                // A investida é o próprio movimento para a casa do rival.
-                String passo = passoParaAlvoBFS(x, y, new int[]{rival.getX(), rival.getY()}, validas);
-                if (passo != null) return passo;
-                // rival visível mas inalcançável agora (muro entre ambos) -> não desiste, aproxima-se pelo mapa
-                return passoExploracao(x, y, validas);
-            }
-
-            // rival mais forte ou igual: só foge se estiver perto o suficiente para ser ameaça
-            if (dist <= 2) {
-                return passoFugaBFS(x, y, rival, validas);
-            }
-            return null; // rival forte mas longe: ignora, segue missão
-        }
 
         // Fuga Nível 2: BFS a partir da posição atual, dentro de um horizonte de passos,
         // escolhe a casa alcançável (contornando muros) que MAXIMIZA a distância ao rival
@@ -489,6 +378,91 @@ import java.util.LinkedHashSet;
                 }
             }
             return melhorAcao; // null só se cercado; o decidirAcao trata o fallback
+        }
+
+        // registarCofreResolvido: chamado pelo AgenteExplorador quando /unlock devolve "sucesso".
+        // O báu é destruído no jogo (+100HP), logo sai de TODA a memória: não desenha nem atrai.
+        public void registarCofreResolvido(int x, int y) {
+            String k = chave(x, y);
+            cofresConhecidos.remove(k);
+            cofresFalhados.remove(k);
+        }
+
+        private int manhattan(int x1, int y1, int x2, int y2) {
+            return Math.abs(x1 - x2) + Math.abs(y1 - y2);
+        }
+
+        // bloco adjacente mais frio (comportamento base de exploração)
+        private String passoMaisFrio(List<String> validas, int x, int y) {
+            String melhor = null;
+            int menorVisitas = Integer.MAX_VALUE;
+            for (String acao : validas) {
+                int[] d = destino(acao, x, y);
+                if (murosConhecidos.contains(chave(d[0], d[1]))) continue; // evita muro memorizado
+                int visitas = historicoVisitas.getOrDefault(chave(d[0], d[1]), 0);
+                if (visitas < menorVisitas) { menorVisitas = visitas; melhor = acao; }
+            }
+            // se todas as válidas caírem em muro conhecido (raro), usa a 1ª válida como último recurso
+            return (melhor != null) ? melhor : validas.get(0);
+        }
+
+        // marca em celulasVistas todas as casas dentro do raio 4.5 cuja linha de visão
+        // até ao robô não é cortada por um muro conhecido (oclusão, §7).
+        private void varrerCampoVisao(int roboX, int roboY) {
+            int raio = 4; // 4.5 euclidiano: dx,dy até 4 (5º já excede em qualquer eixo)
+            for (int dx = -raio; dx <= raio; dx++) {
+                for (int dy = -raio; dy <= raio; dy++) {
+                    if (dx * dx + dy * dy > 4.5 * 4.5) continue; // fora do círculo de raio 4.5
+                    int cx = roboX + dx;
+                    int cy = roboY + dy;
+                    if (cx < 0 || cy < 0) continue;              // arena só tem coords positivas
+                    if (temLinhaDeVisao(roboX, roboY, cx, cy)) {
+                        celulasVistas.add(chave(cx, cy));         // inclui a própria casa do muro (é vista)
+                    }
+                }
+            }
+        }
+
+        // linha de visão limpa: nenhum muro conhecido ENTRE o robô e o alvo.
+        // A casa-alvo pode ser muro (vê-se a parede); só bloqueiam muros no caminho, não o destino.
+        private boolean temLinhaDeVisao(int x0, int y0, int x1, int y1) {
+            // amostragem por passos ao longo da reta (DDA simples)
+            int passos = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0));
+            if (passos == 0) return true; // a própria casa do robô
+            double dx = (x1 - x0) / (double) passos;
+            double dy = (y1 - y0) / (double) passos;
+            // percorre pontos intermédios (exclui origem; exclui destino para não auto-bloquear muros-alvo)
+            for (int i = 1; i < passos; i++) {
+                int px = (int) Math.round(x0 + dx * i);
+                int py = (int) Math.round(y0 + dy * i);
+                if (murosConhecidos.contains(chave(px, py))) return false; // muro corta a visão
+            }
+            return true;
+        }
+
+    // True se algum objeto_fixo ocupa a coordenada dada.
+    private boolean haMuro(Percecao p, int x, int y) {
+        if (p.getObjetos_fixos() == null) return false;
+        for (ObjetoFixo muro : p.getObjetos_fixos()) {
+            if (muro.getX() == x && muro.getY() == y) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+        // rival mais próximo VISÍVEL (dentro do raio de radar). Usado para perseguição sustentada.
+        // Devolve null fora de Batalha ou sem rivais.
+        private Map.Entry<String, OutroRobot> rivalVisivel(Percecao p, int x, int y) {
+            if (!modoBatalha || p.getOutros_robots() == null) return null;
+            java.util.Map.Entry<String, OutroRobot> maisPerto = null;
+            int menor = Integer.MAX_VALUE;
+            for (java.util.Map.Entry<String, OutroRobot> e : p.getOutros_robots().entrySet()) {
+                OutroRobot r = e.getValue();
+                int d = manhattan(x, y, r.getX(), r.getY());
+                if (d < menor) { menor = d; maisPerto = e; }
+            }
+            return maisPerto; // o servidor só devolve rivais dentro do radar -> já estão visíveis
         }
 }
 

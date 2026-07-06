@@ -4457,6 +4457,15 @@ Confirma os pontos 1 e 2 e responde às duas decisões, e escrevo o código.
 
 **PROMPT**
 
+      projeto ja esta quase pronto agora é polir e resolver detalhes;
+      ja temos o robo a fazer moviemento com mapadecalor, resolvendo enigma dos cofres com o ollama trabalhamos eu e o kaiky em branches separados fizemos merge e ta tudo funcional
+      4 pontos precisam de atenção
+      parte mais simples o mapa de calor precisa de alguns ajustes ao ter um cofre em vista marca ele no mapa, no momento ele só esta marcando cofres falhos, e ao abrir o cofre continua marcado no mapa como F de falhado, precisa que ele desapareça ja que ele é destruido no jogo ao ser aberto
+      o robo não esta interagindo com inimigos proximos vamos mudar a estrategia quero que se houver um robo no campo de visão nao importa a distancia ele vai ataca-lo se tiver mais vida que o robo inimigo e se a vida do nosso robo for maior que 50
+      as opções ao ter pouca vida preciso que ele ao ver um cofre o abra pq o importante é q outros robos nao abram entao viu abriu padrao que ja a funcionar segunda questão são os pontos de vida pelo mapa que regeneram 20 de hp ao ter algum no campo de visão e ter menos do que o maximo de hp que seria 229 pois o maximo é 250 menos o que ganha ao consumir vida, porem aqui entra um nivel de importancia em que se houver um inimigo no campo e tiver mos mais vida vamos atacar o inimigo 
+      
+      precisamos do ecrã inicial para setar as config do robo pra entrar na sala esse ecrã tem que super simples apenas pra setarmos o id do robo, id da sala, e qual o modo de jogo sera jogado tudo info que tem que ser passada a classe configuração
+      antes disso preciso abrir uma nova branch pra trabalhar a v2
 
 **RESPOSTA**
 
