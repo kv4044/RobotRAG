@@ -27,8 +27,10 @@ import java.util.LinkedHashSet;
         int y = p.getO_meu_estado().getY();
         if (p.getCofres_no_mundo() == null) return null;
         for (Cofre c : p.getCofres_no_mundo()) {
+            String k = chave(c.getX(), c.getY());
             if (c.getX() == x && c.getY() == y
-                    && !cofresFalhados.contains(chave(x, y))) {
+                    && !cofresFalhados.contains(k)
+                    && !cofresResolvidos.contains(k)) { // não re-tenta cofre já aberto
                 return c;
             }
         }
@@ -54,6 +56,7 @@ import java.util.LinkedHashSet;
         private final Set<String> cofresFalhados = new HashSet<>();
         private final Set<String> cofresConhecidos = new HashSet<>();
         private final Set<String> celulasVistas = new HashSet<>();
+        private final Set<String> cofresResolvidos = new HashSet<>();
 
         // expõem a memória do motor APENAS para leitura (o painel desenha, não altera) — SRP
         public Map<String, Integer> getHistoricoVisitas() { return Collections.unmodifiableMap(historicoVisitas); }
@@ -110,7 +113,9 @@ import java.util.LinkedHashSet;
             // memoriza cofres visíveis para os mostrar no mapa mesmo antes de os pisar
             if (p.getCofres_no_mundo() != null) {
                 for (Cofre c : p.getCofres_no_mundo()) {
-                    cofresConhecidos.add(chave(c.getX(), c.getY()));
+                    String k = chave(c.getX(), c.getY());
+                    if (cofresResolvidos.contains(k)) continue; // já aberto: ignora, não re-adiciona
+                    cofresConhecidos.add(k);
                 }
             }
 
@@ -276,9 +281,10 @@ import java.util.LinkedHashSet;
             List<int[]> r = new ArrayList<>();
             if (p.getCofres_no_mundo() == null) return r;
             for (Cofre c : p.getCofres_no_mundo()) {
-                if (!cofresFalhados.contains(chave(c.getX(), c.getY()))) {
-                    r.add(new int[]{c.getX(), c.getY()});
-                }
+                String k = chave(c.getX(), c.getY());
+                if (cofresFalhados.contains(k)) continue;
+                if (cofresResolvidos.contains(k)) continue; // aberto: não atrai
+                r.add(new int[]{c.getX(), c.getY()});
             }
             return r;
         }
@@ -384,8 +390,9 @@ import java.util.LinkedHashSet;
         // O báu é destruído no jogo (+100HP), logo sai de TODA a memória: não desenha nem atrai.
         public void registarCofreResolvido(int x, int y) {
             String k = chave(x, y);
-            cofresConhecidos.remove(k);
-            cofresFalhados.remove(k);
+            cofresResolvidos.add(k);      // bane permanentemente
+            cofresConhecidos.remove(k);   // some do mapa já
+            cofresFalhados.remove(k);     // limpa qualquer "F" anterior
         }
 
         private int manhattan(int x1, int y1, int x2, int y2) {

@@ -18,6 +18,9 @@ public class AgenteExplorador {
 
     private final MotorRAG motorRAG = new MotorRAGImpl(new OllamaClient());
 
+    // cofres cujo enigma já foi resolvido pelo RAG neste jogo (evita re-correr o LLM na mesma casa)
+    private final java.util.Set<String> enigmasResolvidos = new java.util.HashSet<>();
+
     private boolean manualIngerido = false;
 
     private final Configuracao config;
@@ -93,43 +96,39 @@ public class AgenteExplorador {
                     continue;
                 }
 
-                // --- Deteção de cofre e tentativa real de desbloqueio (pipeline RAG) ---
+                // --- Deteção de cofre e desbloqueio (não consome o turno de movimento) ---
                 Cofre cofreActual = cerebro.cofreSobActual(p);
                 if (cofreActual != null && motorRAG.estaPronto()) {
-                    RespostaRAG r = motorRAG.resolverEnigma(cofreActual.getTerminal_desafio());
-
-                    if (r.deveSubmeter()) {
-                        String st = arena.desbloquear(
-                                config.getRoomId(), config.getRobotId(),
-                                r.getChaveFinal(), r.getChunkFinal(), r.getRespostaBrutaLLMFinal());
-
-                        switch (st) {
-                            case "sucesso":
-                                // báu desapareceu (+100HP) -> remove de toda a memória do cérebro
-                                cerebro.registarCofreResolvido(cofreActual.getX(), cofreActual.getY());
-                                break;
-                            case "falha":
-                                cerebro.registarCofreFalhado(cofreActual.getX(), cofreActual.getY());
-                                break;
-                            case "bloqueado":
-                                pausar(); pausar(); // anti-flood: NÃO blacklist, reenvia próximo turno
-                                break;
-                            case "erro":
-                                System.out.println("Unlock dessincronizado (erro).");
-                                break;
-                            default:
-                                System.out.println("Unlock status inesperado: " + st);
+                    String kCofre = cofreActual.getX() + "," + cofreActual.getY();
+                    if (!enigmasResolvidos.contains(kCofre)) {   // só processa o enigma UMA vez por cofre
+                        enigmasResolvidos.add(kCofre);           // marca já, antes de resolver, para não repetir
+                        RespostaRAG r = motorRAG.resolverEnigma(cofreActual.getTerminal_desafio());
+                        if (r.deveSubmeter()) {
+                            String st = arena.desbloquear(config.getRoomId(), config.getRobotId(),
+                                    r.getChaveFinal(), r.getChunkFinal(), r.getRespostaBrutaLLMFinal());
+                            switch (st) {
+                                case "sucesso":
+                                    cerebro.registarCofreResolvido(cofreActual.getX(), cofreActual.getY());
+                                    break;
+                                case "falha":
+                                    cerebro.registarCofreFalhado(cofreActual.getX(), cofreActual.getY());
+                                    break;
+                                case "bloqueado":
+                                    // anti-flood: reenvia próximo turno; remove a marca para re-tentar o SUBMIT (não o LLM)
+                                    enigmasResolvidos.remove(kCofre);
+                                    break;
+                                default:
+                                    System.out.println("Unlock status: " + st);
+                            }
+                        } else {
+                            cerebro.registarCofreFalhado(cofreActual.getX(), cofreActual.getY());
                         }
-                    } else {
-                        // RAG sem chave fiável -> blacklist para não queimar -10HP a adivinhar
-                        cerebro.registarCofreFalhado(cofreActual.getX(), cofreActual.getY());
                     }
                 }
+                // NÃO há continue/return aqui: o turno segue para decidir e mover normalmente
 
-                // THINK
+                // THINK + ACT no MESMO turno (o robô não fica parado por ter aberto o cofre)
                 String acao = cerebro.decidirAcao(p);
-
-                // ACT
                 if (acao != null) {
                     arena.agir(config.getRoomId(), config.getRobotId(), acao);
                     System.out.println("Pos=(" + p.getO_meu_estado().getX() + ","

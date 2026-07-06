@@ -13,8 +13,8 @@ public class MenuConfiguracao {
 
     // mostra o diálogo modal; devolve true se o utilizador confirmou, false se cancelou
     public boolean mostrar() {
-        JTextField campoRobot = new JTextField("kk");
-        JTextField campoSala = new JTextField("D7EE87");
+        JTextField campoRobot = new JTextField("Neymar");
+        JTextField campoSala = new JTextField("");
         String[] modos = {"Missão", "Batalha"};
         JComboBox<String> comboModo = new JComboBox<>(modos);
 
@@ -32,10 +32,17 @@ public class MenuConfiguracao {
 
         if (res != JOptionPane.OK_OPTION) return false;
 
-        this.robotId = campoRobot.getText().trim();
+
         this.roomId = campoSala.getText().trim();
+        if (this.roomId.isEmpty()) {
+            JOptionPane.showMessageDialog(null, "Indica o ID da sala.");
+            return mostrar(); // reabre o diálogo até haver sala
+        }
+
+        this.robotId = campoRobot.getText().trim();
         this.modoBatalha = comboModo.getSelectedIndex() == 1; // 1 = Batalha
         return true;
+
     }
 
     public String getRobotId()      { return robotId; }
