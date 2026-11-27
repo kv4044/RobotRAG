@@ -65,7 +65,7 @@ public class AgenteExplorador {
                 cerebro.getCelulasVistas()
         );
 
-        JFrame janela = new JFrame("Mapa de Calor - NeymarRAG");
+        JFrame janela = new JFrame("Mapa de Calor - RobotRAG");
         janela.add(painel);
         janela.setSize(600, 600);
         janela.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
