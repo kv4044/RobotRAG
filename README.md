@@ -1,235 +1,237 @@
-# NeymarRAG — Agente Explorador na Arena 3D RAG
+# NeymarRAG — Explorer Agent for the 3D RAG Arena
 
-Agente autónomo em Java que joga na **Arena 3D RAG**: liga-se a um servidor
-remoto, lê telemetria em tempo real e decide as suas ações sozinho, combinando
-um **motor determinístico** (navegação, mapa de calor, combate) com um
-**pipeline RAG** local (resolve enigmas de cofres via Ollama).
+An autonomous Java agent that plays in the **3D RAG Arena**: it connects to a
+remote server, reads real-time telemetry and makes its own decisions, combining
+a **deterministic engine** (navigation, heat map, combat) with a local
+**RAG pipeline** (solves vault riddles using Ollama).
 
-Projeto académico — Instituto Politécnico de Tomar.
+Academic project — Instituto Politécnico de Tomar.
 
----
-
-## Índice
-1. [Como funciona](#como-funciona)
-2. [Arquitetura](#arquitetura)
-3. [Requisitos](#requisitos)
-4. [Instalação do Ollama](#instalação-do-ollama)
-5. [Compilar o projeto](#compilar-o-projeto)
-6. [Obter o código da sala](#obter-o-código-da-sala)
-7. [Executar o agente](#executar-o-agente)
-8. [Modos de jogo](#modos-de-jogo)
-9. [Estrutura de pacotes](#estrutura-de-pacotes)
-10. [Resultados](#resultados)
-11. [Equipa](#equipa)
+🏆 **Class champion** in the battle phase — see [Results](#results).
 
 ---
 
-## Como funciona
-
-O agente corre um ciclo infinito **Sense-Think-Act** (Perceção → Decisão → Ação):
-
-1. **Sense** — pede telemetria ao servidor (`/perceive`): posição, HP, muros,
-   recursos, cofres e robôs rivais dentro do raio de visão (4.5 unidades).
-2. **Think** — o motor determinístico decide a próxima ação com base em:
-    - **Filtro de colisões**: remove direções bloqueadas por muros.
-    - **Combate** (só em Batalha): ataca ou foge conforme o delta de HP.
-    - **Atração**: rota mais curta (BFS) até ao recurso ou cofre mais próximo.
-    - **Mapa de calor**: quando não há alvo, explora as zonas menos visitadas.
-    - **Exploração por fronteira**: se o redor já é conhecido, procura o
-      território ainda não mapeado.
-3. **Act** — envia a ação escolhida (`/action`): `MOVER_NORTE/SUL/ESTE/OESTE`.
-
-Quando o robô pisa um **cofre**, dispara o **pipeline RAG**: descarrega o manual
-técnico, parte-o em blocos, vetoriza-os (embeddings), e ao ler o enigma do
-terminal usa **cosine similarity** para achar o parágrafo relevante e um SLM
-(`qwen2.5-coder`) para extrair a chave de desbloqueio, que é submetida em
-`/unlock`.
-
-Entre cada ciclo há uma pausa (`Thread.sleep`, ≥ 400 ms) para respeitar o
-sistema anti-flood do servidor.
-
-Um **painel visual** (Java Swing) mostra em tempo real o mapa de calor: casas
-visitadas (com contador), muros, recursos (verde), cofres (amarelo; "F" se
-falhado; desaparecem ao serem abertos), células já vistas (cinza) e rivais.
+## Contents
+1. [How it works](#how-it-works)
+2. [Architecture](#architecture)
+3. [Requirements](#requirements)
+4. [Installing Ollama](#installing-ollama)
+5. [Building the project](#building-the-project)
+6. [Getting a room code](#getting-a-room-code)
+7. [Running the agent](#running-the-agent)
+8. [Game modes](#game-modes)
+9. [Package structure](#package-structure)
+10. [Results](#results)
+11. [Team](#team)
 
 ---
 
-## Arquitetura
+## How it works
 
-Dois hemisférios separados por responsabilidade (SRP estrito):
+The agent runs an endless **Sense-Think-Act** loop:
 
-**Motor Determinístico** (navegação e comunicação)
-- `AgenteExplorador` — orquestrador; corre o loop, só delega.
-- `ArenaClient` — só HTTP com a Arena.
-- `MotorHeuristico` — todas as decisões (heurística, memória, combate).
-- `PainelMapaCalor` — só desenho (Swing).
+1. **Sense** — requests telemetry from the server (`/perceive`): position, HP,
+   walls, resources, vaults and rival robots within the vision radius (4.5 units).
+2. **Think** — the deterministic engine picks the next action based on:
+    - **Collision filter**: removes directions blocked by walls.
+    - **Combat** (Battle mode only): attacks or flees depending on the HP difference.
+    - **Attraction**: shortest path (BFS) to the nearest resource or vault.
+    - **Heat map**: when there is no target, explores the least-visited areas.
+    - **Frontier exploration**: if the surroundings are already known, heads
+      for territory that hasn't been mapped yet.
+3. **Act** — sends the chosen action (`/action`): `MOVER_NORTE/SUL/ESTE/OESTE`
+   (move north/south/east/west).
 
-**Pipeline RAG** (resolução de enigmas)
+When the robot steps on a **vault**, it triggers the **RAG pipeline**: it
+downloads the technical manual, splits it into chunks and vectorises them
+(embeddings). When it reads the riddle on the terminal, it uses **cosine
+similarity** to find the relevant paragraph and a small language model
+(`qwen2.5-coder`) to extract the unlock key, which is submitted to `/unlock`.
+
+Each cycle pauses (`Thread.sleep`, ≥ 400 ms) to respect the server's
+anti-flood system.
+
+A **visual panel** (Java Swing) shows the heat map in real time: visited cells
+(with a counter), walls, resources (green), vaults (yellow; "F" if failed; they
+disappear once opened), cells already seen (grey) and rivals.
+
+---
+
+## Architecture
+
+Two halves, split by responsibility (strict single-responsibility principle):
+
+**Deterministic engine** (navigation and communication)
+- `AgenteExplorador` — orchestrator; runs the loop and only delegates.
+- `ArenaClient` — HTTP communication with the Arena only.
+- `MotorHeuristico` — every decision (heuristics, memory, combat).
+- `PainelMapaCalor` — drawing only (Swing).
+
+**RAG pipeline** (riddle solving)
 - `MotorRAG` (interface) — `ingerirManual`, `resolverEnigma`, `estaPronto`.
-- `OllamaClient` — só comunicação com o Ollama (embeddings + geração).
-- `DocumentoVetorial` — modelo: bloco de texto + vetor.
-- `RespostaRAG` — resultado: chave, similaridade, sucesso.
+- `OllamaClient` — communication with Ollama only (embeddings + generation).
+- `DocumentoVetorial` — model: text chunk + vector.
+- `RespostaRAG` — result: key, similarity, success.
 
-O motor determinístico e o RAG comunicam apenas pela interface `MotorRAG` —
-nenhum lado conhece os detalhes internos do outro.
-
----
-
-## Requisitos
-
-- **Java 11+** (usa `java.net.http.HttpClient` nativo)
-- **Maven** (gestão de dependências)
-- **Ollama** (motor de IA local)
-- Ligação à internet (servidor da Arena está na cloud)
-
-Dependência principal (já no `pom.xml`): Gson 2.10.1.
+The deterministic engine and the RAG pipeline talk only through the `MotorRAG`
+interface — neither side knows the other's internals.
 
 ---
 
-## Instalação do Ollama
+## Requirements
 
-O "cérebro" de IA corre **localmente** na tua máquina, não no servidor.
+- **Java 11+** (uses the built-in `java.net.http.HttpClient`)
+- **Maven** (dependency management)
+- **Ollama** (local AI engine)
+- An internet connection (the Arena server runs in the cloud)
 
-**1. Instalar** o Ollama a partir de https://ollama.com/download
-(Windows, macOS ou Linux).
+Main dependency (already in `pom.xml`): Gson 2.10.1.
 
-**2. Descarregar os dois modelos** necessários (num terminal):
+---
+
+## Installing Ollama
+
+The AI "brain" runs **locally** on your machine, not on the server.
+
+**1. Install** Ollama from https://ollama.com/download (Windows, macOS or Linux).
+
+**2. Download the two required models** (in a terminal):
 
 ```bash
 ollama pull qwen2.5-coder:0.5b-instruct-q4_K_M
 ollama pull nomic-embed-text
 ```
 
-- `qwen2.5-coder:0.5b-instruct` → extrai a chave do enigma (raciocínio/lógica).
-- `nomic-embed-text` → converte texto em vetores (busca semântica).
+- `qwen2.5-coder:0.5b-instruct` → extracts the key from the riddle (reasoning/logic).
+- `nomic-embed-text` → turns text into vectors (semantic search).
 
-**3. Verificar** que o Ollama está a correr. Abre no browser:
-http://localhost:11434 — deve mostrar "Ollama is running".
+**3. Check** that Ollama is running. Open http://localhost:11434 in your
+browser — it should say "Ollama is running".
 
-O Ollama tem de estar ativo em segundo plano **antes** de arrancar o agente.
+Ollama must be running in the background **before** you start the agent.
 
 ---
 
-## Compilar o projeto
+## Building the project
 
-Na raiz do projeto:
+From the project root:
 
 ```bash
 mvn clean install
 ```
 
-Garante que a IDE (IntelliJ) reimporta o Maven após alterações ao `pom.xml`.
+Make sure your IDE (IntelliJ) re-imports Maven after any change to `pom.xml`.
 
 ---
 
-## Obter o código da sala
+## Getting a room code
 
-A Arena identifica cada partida por um **código de sala de 6 caracteres**
-(ex.: `D7EE87`). Para o obter:
+The Arena identifies each match by a **6-character room code**
+(e.g. `D7EE87`). To get one:
 
-1. Abre a consola web do servidor no browser.
-2. No painel **"Instanciar Nova Arena"**, insere a password do cenário:
-    - `aluno_treino_2026` → cenário de **Missão** (treino pacífico)
-    - `arena_batalha_global` → cenário de **Batalha** (combate ativo)
-3. Clica em **"Gerar Código de Sala"**. O servidor devolve um código de 6
-   caracteres — **é esse** que introduzes no menu do agente (não a password).
-4. Para acompanhar o robô ao vivo em 3D, usa o painel **"Aceder a Arena
-   Existente"** com o mesmo código.
+1. Open the server's web console in your browser.
+2. In the **"Instanciar Nova Arena"** (create new arena) panel, enter the scenario password:
+    - `aluno_treino_2026` → **Mission** scenario (peaceful training)
+    - `arena_batalha_global` → **Battle** scenario (combat enabled)
+3. Click **"Gerar Código de Sala"** (generate room code). The server returns a
+   6-character code — **that** is what you enter in the agent's menu (not the password).
+4. To watch the robot live in 3D, use the **"Aceder a Arena Existente"**
+   (join existing arena) panel with the same code.
 
-> O código de sala muda a cada sessão. Não o fixes no código — introduz-lo no
-> menu a cada arranque.
+> The room code changes every session. Don't hard-code it — enter it in the
+> menu each time you start the agent.
 
-A documentação viva da API está em `/docs` (Swagger UI) no servidor.
-
----
-
-## Executar o agente
-
-Ao arrancar, aparece um **menu de configuração** onde defines:
-
-- **ID do Robô** — nome do teu agente (por defeito: `Neymar`).
-- **ID da Sala** — o código de 6 caracteres gerado acima (por defeito: vazio).
-- **Modo de Jogo** — `Missão` ou `Batalha`.
-
-Preenche, confirma, e o robô liga-se à sala e começa a jogar de forma autónoma.
-Uma janela abre com o mapa de calor a atualizar em tempo real.
-
-Para correr pela IDE: executa a classe `AgenteExplorador` (método `main`).
+The live API documentation is available at `/docs` (Swagger UI) on the server.
 
 ---
 
-## Modos de jogo
+## Running the agent
 
-**Missão** — combate desativado. O robô foca-se em explorar o labirinto,
-navegar sem bater em paredes, e abrir todos os cofres resolvendo os enigmas via
-RAG, minimizando penalizações de HP.
+On startup, a **configuration menu** lets you set:
 
-**Batalha (Battle Royale)** — combate ativo. Além de abrir cofres, o robô deteta
-rivais no radar e decide **atacar ou fugir** pelo delta de energia: ataca se
-tiver mais HP que o rival (e HP > 50), foge com rota segura (BFS) se estiver em
-desvantagem. Os cofres continuam a curar (+100 HP), podendo virar a batalha.
+- **ID do Robô** (robot ID) — your agent's name (default: `Neymar`).
+- **ID da Sala** (room ID) — the 6-character code generated above (default: empty).
+- **Modo de Jogo** (game mode) — `Missão` (Mission) or `Batalha` (Battle).
+
+Fill it in and confirm: the robot joins the room and starts playing on its own.
+A window opens with the heat map updating in real time.
+
+To run it from the IDE, run the `AgenteExplorador` class (`main` method).
 
 ---
 
-## Estrutura de pacotes
+## Game modes
+
+**Mission** — combat disabled. The robot focuses on exploring the maze,
+navigating without hitting walls and opening every vault by solving the riddles
+with RAG, while keeping HP penalties to a minimum.
+
+**Battle (Battle Royale)** — combat enabled. Besides opening vaults, the robot
+spots rivals on its radar and decides whether to **attack or flee** based on
+the energy difference: it attacks if it has more HP than the rival (and more
+than 50 HP), and flees along a safe route (BFS) when at a disadvantage. Vaults
+still heal (+100 HP) and can turn a fight around.
+
+---
+
+## Package structure
 
 ```
 org.example
-├── AgenteExplorador        # orquestrador (loop Sense-Think-Act)
-├── Configuracao            # config da sessão (sala, robô, modo)
+├── AgenteExplorador        # orchestrator (Sense-Think-Act loop)
+├── Configuracao            # session config (room, robot, mode)
 ├── modelo/                 # DTOs: Percecao, Recurso, Cofre, OutroRobot, ...
 ├── rede/                   # ArenaClient (HTTP)
-├── heuristica/             # MotorHeuristico (decisão determinística)
+├── heuristica/             # MotorHeuristico (deterministic decisions)
 ├── rag/                    # MotorRAG, OllamaClient, DocumentoVetorial
 └── ui/                     # PainelMapaCalor, MenuConfiguracao
 ```
 
 ---
 
-## Notas de física (servidor)
+## Physics notes (server)
 
-- HP inicial 200, teto 250, morte a 0 (sem respawn).
-- Movimento: −1 HP · recurso: +20 HP · cofre aberto: +100 HP · unlock falhado: −10 HP.
-- Raio de visão: 4.5 unidades; muros bloqueiam movimento **e** visão (oclusão).
-- Respeita o anti-flood: pausa ≥ 400 ms entre ciclos.
-
----
-
-## Resultados
-
-O agente foi avaliado em duas fases, contra os robôs das outras duplas da turma
-e um robô de referência do professor:
-
-- **Fase de coleta (Missão)**: abrir todos os cofres do mapa. ✅ Concluída com sucesso.
-- **Fase de luta (Batalha)**: 🏆 **campeão da turma**. Venceu todos os
-  adversários, incluindo o 2.º classificado, cuja estratégia era fugir de todos
-  e acumular energia.
-
-### Estratégia de energia e combate
-
-A energia (HP) é gerida por limiares:
-
-| Energia | Comportamento |
-|---|---|
-| **< 80** | **Emergência**: vai ao recurso ou cofre mais próximo (ambos curam), incluindo os que já memorizou |
-| **80 – 229** | **Oportunista**: segue a missão, mas apanha energia que esteja no caminho |
-| **≥ 230** | **Foco nos cofres** (230 = teto de 250 − 20 de um recurso, para não desperdiçar energia) |
-
-Em modo Batalha, o combate tem prioridade máxima:
-
-- **Ataca** se tiver mais energia que o rival e mais de 50 HP: persegue-o pela
-  rota mais curta (BFS), contornando muros, até ao abate.
-- **Foge** se não tiver vantagem e o rival estiver a 2 blocos ou menos,
-  escolhendo a casa mais afastada dele.
-- Caso contrário, **ignora** o rival e continua a missão.
+- Starting HP 200, cap 250, death at 0 (no respawn).
+- Moving: −1 HP · resource: +20 HP · vault opened: +100 HP · failed unlock: −10 HP.
+- Vision radius: 4.5 units; walls block movement **and** vision (occlusion).
+- Respect the anti-flood limit: pause ≥ 400 ms between cycles.
 
 ---
 
-## Equipa
+## Results
 
-O projeto foi dividido pelos dois hemisférios da arquitetura:
+The agent was evaluated in two phases, against the robots of the other teams in
+the class and a reference robot provided by the teacher:
 
-| Membro | Responsável por |
+- **Collection phase (Mission)**: open every vault on the map. ✅ Completed successfully.
+- **Battle phase**: 🏆 **class champion**. Beat every opponent, including the
+  runner-up, whose strategy was to run away from everyone and stockpile energy.
+
+### Energy and combat strategy
+
+Energy (HP) is managed with thresholds:
+
+| Energy | Behaviour |
 |---|---|
-| **Kaiky Ferreira** — [kv4044](https://github.com/kv4044) | **Pipeline RAG**: integração com o Ollama (embeddings e geração), vetorização do manual, pesquisa por *cosine similarity*, extração da chave e desbloqueio dos cofres (`rag/`, `OllamaClient`) |
-| **Victor Lopes** — [MarcondezVictor](https://github.com/MarcondezVictor) | **Motor determinístico**: ciclo Sense-Think-Act, leitura e interpretação do mapa, movimento e navegação (BFS), mapa de calor e exploração por fronteira, estratégia de energia e combate, painel visual e menu de configuração (`AgenteExplorador`, `heuristica/`, `rede/ArenaClient`, `ui/`, `modelo/`) |
+| **< 80** | **Emergency**: heads for the nearest resource or vault (both heal), including ones it has memorised |
+| **80 – 229** | **Opportunistic**: keeps on with the mission but picks up energy along the way |
+| **≥ 230** | **Vault focus** (230 = the 250 cap − 20 from a resource, so no energy is wasted) |
+
+In Battle mode, combat takes top priority:
+
+- **Attacks** if it has more energy than the rival and more than 50 HP: chases it
+  along the shortest path (BFS), around walls, until it is knocked out.
+- **Flees** if it has no advantage and the rival is 2 cells away or closer,
+  picking the cell furthest from it.
+- Otherwise it **ignores** the rival and carries on with the mission.
+
+---
+
+## Team
+
+The work was split along the two halves of the architecture:
+
+| Member | Responsible for |
+|---|---|
+| **Kaiky Ferreira** — [kv4044](https://github.com/kv4044) | **RAG pipeline**: Ollama integration (embeddings and generation), vectorising the manual, *cosine similarity* search, key extraction and vault unlocking (`rag/`, `OllamaClient`) |
+| **Victor Lopes** — [MarcondezVictor](https://github.com/MarcondezVictor) | **Deterministic engine**: Sense-Think-Act loop, reading and interpreting the map, movement and navigation (BFS), heat map and frontier exploration, energy and combat strategy, visual panel and configuration menu (`AgenteExplorador`, `heuristica/`, `rede/ArenaClient`, `ui/`, `modelo/`) |
