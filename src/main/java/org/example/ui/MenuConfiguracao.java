@@ -13,7 +13,7 @@ public class MenuConfiguracao {
 
     // mostra o diálogo modal; devolve true se o utilizador confirmou, false se cancelou
     public boolean mostrar() {
-        JTextField campoRobot = new JTextField("Neymar");
+        JTextField campoRobot = new JTextField("Explorer");
         JTextField campoSala = new JTextField("");
         String[] modos = {"Missão", "Batalha"};
         JComboBox<String> comboModo = new JComboBox<>(modos);
@@ -27,7 +27,7 @@ public class MenuConfiguracao {
         painel.add(comboModo);
 
         int res = JOptionPane.showConfirmDialog(
-                null, painel, "Configuração do Agente - NeymarRAG",
+                null, painel, "Configuração do Agente - RobotRAG",
                 JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
 
         if (res != JOptionPane.OK_OPTION) return false;

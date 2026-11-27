@@ -1,9 +1,18 @@
-# NeymarRAG — Explorer Agent for the 3D RAG Arena
+# RobotRAG — Autonomous Agent for a 3D Robot Arena
 
-An autonomous Java agent that plays in the **3D RAG Arena**: it connects to a
-remote server, reads real-time telemetry and makes its own decisions, combining
-a **deterministic engine** (navigation, heat map, combat) with a local
-**RAG pipeline** (solves vault riddles using Ollama).
+![Java](https://img.shields.io/badge/Java-11+-ED8B00?logo=openjdk&logoColor=white)
+![Maven](https://img.shields.io/badge/Maven-C71A36?logo=apachemaven&logoColor=white)
+![Ollama](https://img.shields.io/badge/Ollama-local%20LLM-000000?logo=ollama&logoColor=white)
+
+An autonomous agent written in Java that competes in a multiplayer 3D arena. It
+connects to a remote game server, reads real-time telemetry and makes every
+decision on its own — no human input. It combines two systems:
+
+- a **deterministic decision engine** for navigation, exploration, energy
+  management and combat;
+- a local **RAG pipeline** (Retrieval-Augmented Generation) that reads a
+  technical manual and uses a small language model to solve the riddles that
+  lock the vaults.
 
 Academic project — Instituto Politécnico de Tomar.
 
@@ -12,17 +21,39 @@ Academic project — Instituto Politécnico de Tomar.
 ---
 
 ## Contents
-1. [How it works](#how-it-works)
-2. [Architecture](#architecture)
-3. [Requirements](#requirements)
-4. [Installing Ollama](#installing-ollama)
-5. [Building the project](#building-the-project)
-6. [Getting a room code](#getting-a-room-code)
-7. [Running the agent](#running-the-agent)
-8. [Game modes](#game-modes)
-9. [Package structure](#package-structure)
-10. [Results](#results)
-11. [Team](#team)
+1. [What is RAG?](#what-is-rag)
+2. [How it works](#how-it-works)
+3. [Architecture](#architecture)
+4. [Requirements](#requirements)
+5. [Installing Ollama](#installing-ollama)
+6. [Building the project](#building-the-project)
+7. [Getting a room code](#getting-a-room-code)
+8. [Running the agent](#running-the-agent)
+9. [Game modes](#game-modes)
+10. [Package structure](#package-structure)
+11. [Results](#results)
+12. [Team](#team)
+
+---
+
+## What is RAG?
+
+**RAG (Retrieval-Augmented Generation)** is a technique that makes a language
+model answer using a specific document instead of only what it learned during
+training. It works in two steps:
+
+1. **Retrieval** — the document is split into small chunks, and each chunk is
+   turned into an *embedding* (a list of numbers that represents its meaning).
+   When a question arrives, it is turned into an embedding too, and the chunks
+   with the most similar meaning are found with *cosine similarity*.
+2. **Generation** — only those relevant chunks are given to the language model
+   together with the question, so it answers based on the right information.
+
+Here, each vault in the arena is locked by a riddle whose answer is hidden in a
+long technical manual. Feeding the whole manual to a small local model would be
+slow and unreliable, so the agent retrieves the right paragraph first and only
+then asks the model to extract the unlock key. Everything runs **locally** with
+Ollama — no external AI API is used.
 
 ---
 
@@ -149,7 +180,7 @@ The live API documentation is available at `/docs` (Swagger UI) on the server.
 
 On startup, a **configuration menu** lets you set:
 
-- **ID do Robô** (robot ID) — your agent's name (default: `Neymar`).
+- **ID do Robô** (robot ID) — your agent's name (default: `Explorer`).
 - **ID da Sala** (room ID) — the 6-character code generated above (default: empty).
 - **Modo de Jogo** (game mode) — `Missão` (Mission) or `Batalha` (Battle).
 
