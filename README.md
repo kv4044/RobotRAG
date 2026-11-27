@@ -14,9 +14,13 @@ decision on its own — no human input. It combines two systems:
   technical manual and uses a small language model to solve the riddles that
   lock the vaults.
 
-Academic project — Instituto Politécnico de Tomar.
+Academic project — Polytechnic University of Tomar.
 
 🏆 **Class champion** in the battle phase — see [Results](#results).
+
+<p align="center">
+  <img src="docs/media/robotRag.gif" width="100%" alt="The agent playing on its own: its heat map panel fills in while the robot moves through the live 3D arena">
+</p>
 
 ---
 
@@ -85,6 +89,10 @@ anti-flood system.
 A **visual panel** (Java Swing) shows the heat map in real time: visited cells
 (with a counter), walls, resources (green), vaults (yellow; "F" if failed; they
 disappear once opened), cells already seen (grey) and rivals.
+
+| 3D arena (server view) | Heat map (agent panel) |
+|---|---|
+| <img src="docs/media/arena.png" alt="Training room in the 3D arena: the robot, walls, resources and vaults, with 2 of 4 vaults opened"> | <img src="docs/media/heatmap.png" alt="Heat map panel: visited cells with visit counters, walls, a resource in green and vaults in yellow"> |
 
 ---
 
