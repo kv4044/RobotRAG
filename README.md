@@ -19,7 +19,8 @@ Projeto académico — Instituto Politécnico de Tomar.
 7. [Executar o agente](#executar-o-agente)
 8. [Modos de jogo](#modos-de-jogo)
 9. [Estrutura de pacotes](#estrutura-de-pacotes)
-10. [Equipa](#equipa)
+10. [Resultados](#resultados)
+11. [Equipa](#equipa)
 
 ---
 
@@ -194,6 +195,36 @@ org.example
 
 ---
 
+## Resultados
+
+O agente foi avaliado em duas fases, contra os robôs das outras duplas da turma
+e um robô de referência do professor:
+
+- **Fase de coleta (Missão)**: abrir todos os cofres do mapa. ✅ Concluída com sucesso.
+- **Fase de luta (Batalha)**: 🏆 **campeão da turma**. Venceu todos os
+  adversários, incluindo o 2.º classificado, cuja estratégia era fugir de todos
+  e acumular energia.
+
+### Estratégia de energia e combate
+
+A energia (HP) é gerida por limiares:
+
+| Energia | Comportamento |
+|---|---|
+| **< 80** | **Emergência**: vai ao recurso ou cofre mais próximo (ambos curam), incluindo os que já memorizou |
+| **80 – 229** | **Oportunista**: segue a missão, mas apanha energia que esteja no caminho |
+| **≥ 230** | **Foco nos cofres** (230 = teto de 250 − 20 de um recurso, para não desperdiçar energia) |
+
+Em modo Batalha, o combate tem prioridade máxima:
+
+- **Ataca** se tiver mais energia que o rival e mais de 50 HP: persegue-o pela
+  rota mais curta (BFS), contornando muros, até ao abate.
+- **Foge** se não tiver vantagem e o rival estiver a 2 blocos ou menos,
+  escolhendo a casa mais afastada dele.
+- Caso contrário, **ignora** o rival e continua a missão.
+
+---
+
 ## Equipa
 
 O projeto foi dividido pelos dois hemisférios da arquitetura:
@@ -201,4 +232,4 @@ O projeto foi dividido pelos dois hemisférios da arquitetura:
 | Membro | Responsável por |
 |---|---|
 | **Kaiky Ferreira** — [kv4044](https://github.com/kv4044) | **Pipeline RAG**: integração com o Ollama (embeddings e geração), vetorização do manual, pesquisa por *cosine similarity*, extração da chave e desbloqueio dos cofres (`rag/`, `OllamaClient`) |
-| **Victor Lopes** — [MarcondezVictor](https://github.com/MarcondezVictor) | **Motor determinístico**: ciclo Sense-Think-Act, leitura e interpretação do mapa, movimento e navegação (BFS), mapa de calor e exploração por fronteira, combate com rivais, painel visual e menu de configuração (`AgenteExplorador`, `heuristica/`, `rede/ArenaClient`, `ui/`, `modelo/`) |
+| **Victor Lopes** — [MarcondezVictor](https://github.com/MarcondezVictor) | **Motor determinístico**: ciclo Sense-Think-Act, leitura e interpretação do mapa, movimento e navegação (BFS), mapa de calor e exploração por fronteira, estratégia de energia e combate, painel visual e menu de configuração (`AgenteExplorador`, `heuristica/`, `rede/ArenaClient`, `ui/`, `modelo/`) |
